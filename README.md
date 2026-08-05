@@ -186,6 +186,7 @@ curl -s -X POST "http://localhost:8080/api/v1/admin/notifications/preview" \
 모든 시각은 **Asia/Seoul** 기준이며, 스케줄러 cron에도 `zone = ${imlate.timezone}` 이 지정되어 있습니다.
 표의 시각은 전부 **설정값의 기본값**일 뿐 코드에 박혀 있지 않습니다 — 변경 절차는
 [docs/OPERATIONS.md §5.2](docs/OPERATIONS.md) 를 보세요.
+| [docs/RETROSPECTIVE.md](docs/RETROSPECTIVE.md) | **개발 회고** — 무엇을 고민했고 무엇을 놓쳤다가 어떻게 잡았는지 |
 
 ---
 
