@@ -268,11 +268,31 @@ class RegistrationControllerTest {
         mockMvc.perform(post(PATH)
                         .contentType(MediaType.APPLICATION_JSON)
                         .characterEncoding(StandardCharsets.UTF_8)
-                        .content(body("  1  ", "  홍  길동  ", "  302  ")))
+                        .content(body("  1  ", "  홍길동  ", "  302  ")))
                 .andExpect(status().isCreated());
 
-        // DTO 가 공백까지 막아 버리면 "앞뒤 공백은 알아서 정리된다"는 기존 동작이 조용히 사라진다.
+        // DTO 가 앞뒤 공백까지 막아 버리면 "앞뒤 공백은 알아서 정리된다"는 기존 동작이 조용히 사라진다.
         verify(registrationService).register(any(RegistrationCommand.class));
+    }
+
+    @Test
+    @DisplayName("가운데 공백은 400 으로 거부한다 (앞뒤 공백과 구분된다)")
+    void 가운데_공백은_400() throws Exception {
+        mockMvc.perform(post(PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .characterEncoding(StandardCharsets.UTF_8)
+                        .content(body("1", "홍 길동", "302")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("studentName"));
+
+        mockMvc.perform(post(PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .characterEncoding(StandardCharsets.UTF_8)
+                        .content(body("1 2", "홍길동", "302")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("className"));
+
+        verify(registrationService, never()).register(any(RegistrationCommand.class));
     }
 
     @Test

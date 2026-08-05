@@ -26,8 +26,8 @@ public record CancelRequest(
 
         @NotBlank(message = "이름을 입력해 주세요.")
         @Size(max = 20, message = "이름은 20자 이내로 입력해 주세요.")
-        @Pattern(regexp = "^\\s*[가-힣A-Za-z]+(\\s+[가-힣A-Za-z]+)*\\s*$",
-                message = "이름에는 한글·영문만 사용할 수 있습니다.")
+        @Pattern(regexp = "^\\s*[가-힣A-Za-z]+\\s*$",
+                message = "이름은 띄어쓰기 없이 한글 또는 영문만 입력해 주세요.")
         String studentName,
 
         @NotBlank(message = "기숙사 호수를 입력해 주세요.")

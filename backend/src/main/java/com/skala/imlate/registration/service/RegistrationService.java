@@ -85,16 +85,18 @@ public class RegistrationService {
     private static final Pattern DIGITS_ONLY_FIELD = Pattern.compile("^[0-9]+$");
 
     /**
-     * 이름 허용 문자 — <b>글자만</b>(한글 완성형·영문). 숫자·기호는 받지 않는다.
+     * 이름 허용 문자 — <b>글자만</b>(한글 완성형·영문). 숫자·기호·<b>공백</b>은 받지 않는다.
      *
      * <p>낱자(ㄱ, ㅏ 같은 자모)는 제외한다 — 이름이 될 수 없고, 조합이 덜 끝난 입력이 그대로 저장되면
      * 나중에 취소할 때 같은 값을 다시 입력하지 못한다.
      *
-     * <p><b>글자 사이의 공백 한 칸은 허용한다.</b> {@code "Alice Kim"} 처럼 띄어 쓰는 이름이 실제로 있고,
-     * 정규화가 앞뒤 공백을 지우고 연속 공백을 한 칸으로 줄인 뒤에 이 검사를 하므로
-     * 여기서 공백을 막으면 그런 이름이 통째로 거부된다.
+     * <p><b>글자 사이 공백은 허용하지 않는다(운영 요청).</b> {@code "Alice Kim"}, {@code "남궁 민수"} 처럼
+     * 띄어 쓴 이름은 거부되며 붙여서 입력해야 한다. 같은 사람이 어떤 날은 띄고 어떤 날은 붙여 쓰면
+     * 서로 다른 사람으로 잡혀 중복 등록·취소 불가로 이어지는데, 그 흔들림을 없애는 쪽을 택했다.
+     *
+     * <p>앞뒤 공백은 정규화가 지워 주므로 여기까지 오지 않는다 — 막는 것은 <u>가운데</u> 공백뿐이다.
      */
-    private static final Pattern NAME_FIELD = Pattern.compile("^[가-힣A-Za-z]+( [가-힣A-Za-z]+)*$");
+    private static final Pattern NAME_FIELD = Pattern.compile("^[가-힣A-Za-z]+$");
 
     /** 연속 공백을 한 칸으로 줄이기 위한 패턴. */
     private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s+");
@@ -422,8 +424,12 @@ public class RegistrationService {
     private static String normalizeName(String raw, String fieldLabel, int maxLength) {
         String value = normalizeNonEmpty(raw, fieldLabel, maxLength);
         if (!NAME_FIELD.matcher(value).matches()) {
-            throw ApiException.of(ErrorCode.VALIDATION_FAILED,
-                    fieldLabel + "에는 한글·영문만 사용할 수 있습니다.");
+            // 공백 때문에 걸린 것인지 따로 알려 준다 — "한글·영문만" 이라고만 하면
+            // 한글로 띄어 쓴 사람은 무엇이 잘못됐는지 알 수 없다.
+            String reason = value.indexOf(' ') >= 0
+                    ? "은(는) 띄어쓰기 없이 붙여서 입력해 주세요."
+                    : "에는 한글·영문만 사용할 수 있습니다.";
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED, fieldLabel + reason);
         }
         return value;
     }

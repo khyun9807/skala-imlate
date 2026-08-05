@@ -86,11 +86,11 @@ test.describe('이름은 글자만', () => {
     await page.getByLabel(LABEL.password).fill('1234')
     await page.getByRole('button', { name: /복귀 등록하기$/ }).click()
 
-    await expect(page.getByText('이름에는 한글·영문만 사용할 수 있습니다.')).toBeVisible()
+    await expect(page.getByText('이름은 띄어쓰기 없이 한글 또는 영문만 입력해 주세요.')).toBeVisible()
     expect(mock.registrationRequests, '검증에 걸렸는데 요청이 나갔다').toHaveLength(0)
   })
 
-  test('띄어 쓰는 영문 이름은 통과한다', async ({ page }) => {
+  test('★ 이름 가운데 공백은 거부한다 — 붙여서 입력해야 한다', async ({ page }) => {
     const mock = await openRegister(page)
 
     await page.getByLabel(LABEL.className).fill('4')
@@ -99,8 +99,34 @@ test.describe('이름은 글자만', () => {
     await page.getByLabel(LABEL.password).fill('1234')
     await page.getByRole('button', { name: /복귀 등록하기$/ }).click()
 
+    await expect(page.getByText('이름은 띄어쓰기 없이 한글 또는 영문만 입력해 주세요.')).toBeVisible()
+    expect(mock.registrationRequests, '검증에 걸렸는데 요청이 나갔다').toHaveLength(0)
+  })
+
+  test('붙여 쓰면 통과한다', async ({ page }) => {
+    const mock = await openRegister(page)
+
+    await page.getByLabel(LABEL.className).fill('4')
+    await page.getByLabel(LABEL.studentName).fill('AliceKim')
+    await page.getByLabel(LABEL.roomNumber).fill('602')
+    await page.getByLabel(LABEL.password).fill('1234')
+    await page.getByRole('button', { name: /복귀 등록하기$/ }).click()
+
     await expect(page.getByRole('heading', { name: '등록이 완료되었습니다' })).toBeVisible()
-    expect(mock.registrationRequests[0]).toMatchObject({ studentName: 'Alice Kim' })
+    expect(mock.registrationRequests[0]).toMatchObject({ studentName: 'AliceKim' })
+  })
+
+  test('앞뒤 공백은 여전히 정리된다 — 막는 것은 가운데 공백뿐이다', async ({ page }) => {
+    const mock = await openRegister(page)
+
+    await page.getByLabel(LABEL.className).fill('4')
+    await page.getByLabel(LABEL.studentName).fill('  홍길동  ')
+    await page.getByLabel(LABEL.roomNumber).fill('602')
+    await page.getByLabel(LABEL.password).fill('1234')
+    await page.getByRole('button', { name: /복귀 등록하기$/ }).click()
+
+    await expect(page.getByRole('heading', { name: '등록이 완료되었습니다' })).toBeVisible()
+    expect(mock.registrationRequests[0]).toMatchObject({ studentName: '홍길동' })
   })
 })
 

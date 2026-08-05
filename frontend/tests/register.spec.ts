@@ -396,7 +396,7 @@ test.describe('입력 검증', () => {
     await fillForm(page, '1', '홍길동!!', '302')
     await page.getByRole('button', { name: SUBMIT_NAME }).click()
 
-    await expect(page.getByText('이름에는 한글·영문만 사용할 수 있습니다.')).toBeVisible()
+    await expect(page.getByText('이름은 띄어쓰기 없이 한글 또는 영문만 입력해 주세요.')).toBeVisible()
     expect(mock.registrationRequests).toHaveLength(0)
   })
 

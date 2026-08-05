@@ -114,10 +114,29 @@ class InputRuleTest {
     }
 
     @Test
-    @DisplayName("띄어 쓰는 영문 이름은 통과한다 — 공백을 막으면 그런 이름이 통째로 거부된다")
-    void 띄어쓴_영문_이름은_통과한다() {
-        assertThatCode(() -> register("1", "Alice Kim", "302")).doesNotThrowAnyException();
-        assertThatCode(() -> register("1", "남궁 민수", "303")).doesNotThrowAnyException();
+    @DisplayName("★ 이름 가운데 공백은 허용하지 않는다 — 붙여서 입력해야 한다")
+    void 이름_가운데_공백은_거부한다() {
+        for (String spaced : new String[] {"Alice Kim", "남궁 민수", "홍 길동", "홍  길동"}) {
+            ApiException thrown = registerExpectingFailure("1", spaced, "302");
+            assertThat(thrown.code()).isEqualTo(ErrorCode.VALIDATION_FAILED);
+            // 무엇이 잘못됐는지 알 수 있어야 한다. "한글·영문만" 이라고만 하면
+            // 한글로 띄어 쓴 사람은 이유를 짐작할 수 없다.
+            assertThat(thrown.getMessage()).contains("띄어쓰기");
+        }
+        verify(registrationWriter, never()).insert(any());
+
+        // 붙여 쓰면 통과한다.
+        assertThatCode(() -> register("1", "AliceKim", "302")).doesNotThrowAnyException();
+        assertThatCode(() -> register("1", "남궁민수", "303")).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("반·호수 가운데 공백도 허용하지 않는다")
+    void 숫자_사이_공백도_거부한다() {
+        assertThat(registerExpectingFailure("1 2", "홍길동", "302").code())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+        assertThat(registerExpectingFailure("1", "홍길동", "30 2").code())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
     }
 
     @Test
@@ -128,17 +147,17 @@ class InputRuleTest {
     }
 
     @Test
-    @DisplayName("앞뒤 공백은 지우고 가운데 연속 공백은 한 칸으로 줄인 뒤 검사한다")
-    void 정규화_후에_검사한다() {
-        register("  1  ", "  Alice   Kim  ", "  302  ");
+    @DisplayName("앞뒤 공백은 여전히 지운다 — 막는 것은 가운데 공백뿐이다")
+    void 앞뒤_공백은_지운다() {
+        register("  1  ", "  홍길동  ", "  302  ");
 
         org.mockito.ArgumentCaptor<ReturnRegistration> saved =
                 org.mockito.ArgumentCaptor.forClass(ReturnRegistration.class);
         verify(registrationWriter).insert(saved.capture());
 
-        // 공백 때문에 거부되는 것이 아니라, 정리된 값으로 저장되어야 한다.
+        // 앞뒤 공백 때문에 거부되는 것이 아니라, 정리된 값으로 저장되어야 한다.
         assertThat(saved.getValue().getClassName()).isEqualTo("1");
-        assertThat(saved.getValue().getStudentName()).isEqualTo("Alice Kim");
+        assertThat(saved.getValue().getStudentName()).isEqualTo("홍길동");
         assertThat(saved.getValue().getRoomNumber()).isEqualTo("302");
     }
 

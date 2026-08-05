@@ -223,20 +223,21 @@ class RegistrationServiceTest {
     }
 
     @Test
-    @DisplayName("입력은 앞뒤 공백 제거 + 연속 공백 축약으로 정규화된 뒤 저장된다")
+    @DisplayName("입력은 앞뒤 공백 제거로 정규화된 뒤 저장된다")
     void 입력값을_정규화한다() {
         existing(Optional.empty());
 
+        // 가운데 공백은 이제 허용하지 않으므로(운영 요청) 앞뒤 공백만 확인한다.
         RegistrationResult result =
-                service.register(new RegistrationCommand("  1 ", "홍  길동", " 302  ", TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
+                service.register(new RegistrationCommand("  1 ", "  홍길동  ", " 302  ", TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
 
         assertThat(result.registration().getClassName()).isEqualTo("1");
-        assertThat(result.registration().getStudentName()).isEqualTo("홍 길동");
+        assertThat(result.registration().getStudentName()).isEqualTo("홍길동");
         assertThat(result.registration().getRoomNumber()).isEqualTo("302");
 
         ArgumentCaptor<WalEntry> walCaptor = ArgumentCaptor.forClass(WalEntry.class);
         verify(walRepository).append(walCaptor.capture());
-        assertThat(walCaptor.getValue().studentName()).isEqualTo("홍 길동");
+        assertThat(walCaptor.getValue().studentName()).isEqualTo("홍길동");
     }
 
     @Test

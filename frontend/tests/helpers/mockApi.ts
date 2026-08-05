@@ -192,7 +192,8 @@ export const LONG_ROSTER: RosterEntry[] = TEST_ROSTER.map((entry) => ({
   //
   // 새 규칙에서의 최악 폭은 "숫자 20자(반각) + 한글 20자(전각)" 조합이다.
   className: '9'.repeat(20),
-  studentName: padToMax(`${entry.studentName} 가나다`),
+  // 이름에 가운데 공백을 허용하지 않으므로 붙여서 20자를 채운다.
+  studentName: padToMax(`${entry.studentName}가나다`),
   roomNumber: '8'.repeat(20),
 }))
 

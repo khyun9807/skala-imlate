@@ -10,7 +10,9 @@ import jakarta.validation.constraints.Size;
  * <p><b>반·기숙사 호수는 숫자만, 이름은 글자만(한글·영문)</b> 받는다(운영 요청).
  * 서비스가 정규화(trim + 연속 공백 축약)한 뒤 같은 규칙으로 한 번 더 검증한다.
  *
- * <p>이름에만 글자 사이 공백을 허용한다 — {@code "Alice Kim"} 처럼 띄어 쓰는 이름이 있다.
+ * <p><b>세 필드 모두 가운데 공백을 허용하지 않는다</b>(운영 요청).
+ * {@code "Alice Kim"}, {@code "남궁 민수"} 처럼 띄어 쓴 이름은 붙여서 입력해야 한다.
+ * 앞뒤 공백은 아래 이유로 여전히 눈감아 준다(서비스가 지운다).
  *
  * <p><b>여기의 정규식이 앞뒤 공백을 눈감아 주는 것은 의도한 것이다.</b>
  * 이 계층은 <u>1차 필터</u>일 뿐이고 최종 판정은 서비스가 정규화한 뒤에 한다.
@@ -32,8 +34,8 @@ public record RegistrationRequest(
 
         @NotBlank(message = "이름을 입력해 주세요.")
         @Size(max = 20, message = "이름은 20자 이내로 입력해 주세요.")
-        @Pattern(regexp = "^\\s*[가-힣A-Za-z]+(\\s+[가-힣A-Za-z]+)*\\s*$",
-                message = "이름에는 한글·영문만 사용할 수 있습니다.")
+        @Pattern(regexp = "^\\s*[가-힣A-Za-z]+\\s*$",
+                message = "이름은 띄어쓰기 없이 한글 또는 영문만 입력해 주세요.")
         String studentName,
 
         @NotBlank(message = "기숙사 호수를 입력해 주세요.")

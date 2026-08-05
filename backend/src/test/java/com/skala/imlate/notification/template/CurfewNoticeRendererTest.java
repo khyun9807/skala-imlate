@@ -47,7 +47,7 @@ class CurfewNoticeRendererTest {
         rows.add(new NoticePayload.Row(2, "1", "남궁민수", "302"));
         rows.add(new NoticePayload.Row(3, "1", "박준호", "305"));
         rows.add(new NoticePayload.Row(4, "1", "홍길동", "302"));
-        rows.add(new NoticePayload.Row(5, "2", "Alice Kim", "410"));
+        rows.add(new NoticePayload.Row(5, "2", "AliceKim", "410"));
         rows.add(new NoticePayload.Row(6, "2", "서지우", "411"));
         rows.add(new NoticePayload.Row(7, "2", "이수민", "412"));
         rows.add(new NoticePayload.Row(8, "2", "정예린", "410"));

@@ -37,10 +37,10 @@ import {
  * 서버 검증 규칙과 동일한 허용 문자 (SPEC §5.5).
  *
  * 반·기숙사 호수는 숫자만, 이름은 글자만(한글·영문) 받는다.
- * 이름에만 글자 사이 공백 한 칸을 허용한다 — "Alice Kim" 처럼 띄어 쓰는 이름이 있다.
+ * **세 필드 모두 가운데 공백을 허용하지 않는다**(운영 요청). 앞뒤 공백은 정규화가 지운다.
  */
 const DIGITS_PATTERN = /^[0-9]{1,20}$/
-const NAME_PATTERN = /^[가-힣A-Za-z]+( [가-힣A-Za-z]+)*$/
+const NAME_PATTERN = /^[가-힣A-Za-z]+$/
 const MAX_LENGTH = 20
 
 /** 취소 비밀번호 자릿수. 서버 `imlate.registration.cancel.password-length` 와 같아야 한다. */
@@ -65,7 +65,7 @@ const TOO_LONG_MESSAGES: Record<FieldKey, string> = {
 
 const PATTERN_MESSAGES: Record<FieldKey, string> = {
   className: '반은 숫자만 입력해 주세요.',
-  studentName: '이름에는 한글·영문만 사용할 수 있습니다.',
+  studentName: '이름은 띄어쓰기 없이 한글 또는 영문만 입력해 주세요.',
   roomNumber: '기숙사 호수는 숫자만 입력해 주세요.',
   cancelPassword: '',
 }
@@ -495,7 +495,7 @@ function clearSavedInput(): void {
             :suggestions="nameSuggestions"
             :disabled="isClosed || submitting"
             placeholder="예: 홍길동"
-            hint="한글 또는 영문 이름만 입력할 수 있습니다."
+            hint="띄어쓰기 없이 한글 또는 영문으로 적어 주세요."
             autocomplete="name"
             inputmode="text"
             enterkeyhint="next"

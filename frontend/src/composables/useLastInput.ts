@@ -110,8 +110,8 @@ function loadRecentInputs(): SavedInput[] {
 /** 반·기숙사 호수 규칙 — 숫자만. 화면·서버 검증과 같은 규칙이어야 한다. */
 const DIGITS_PATTERN = /^[0-9]{1,20}$/
 
-/** 이름 규칙 — 글자만(한글·영문), 글자 사이 공백 한 칸 허용. */
-const NAME_PATTERN = /^[가-힣A-Za-z]+( [가-힣A-Za-z]+)*$/
+/** 이름 규칙 — 글자만(한글·영문). 가운데 공백 불허(운영 요청). */
+const NAME_PATTERN = /^[가-힣A-Za-z]+$/
 
 function toSavedInput(value: unknown): SavedInput | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
