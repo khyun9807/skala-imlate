@@ -1,0 +1,121 @@
+# =====================================================================
+# imlate — terraform.tfvars 예시
+#
+#   cp terraform.tfvars.example terraform.tfvars   후 값을 채운다.
+#   terraform.tfvars 는 .gitignore 대상이다. **절대 커밋하지 말 것.**
+#
+#   아래 <...> 는 전부 플레이스홀더다. 실제 키/비밀번호를 이 파일에 남기지 않는다.
+# =====================================================================
+
+# ---------------- 공통 ----------------
+aws_region  = "ap-northeast-2"
+project     = "imlate"
+environment = "prod"
+timezone    = "Asia/Seoul"
+
+additional_tags = {
+  Owner = "skala-imlate"
+}
+
+# ---------------- 네트워크 ----------------
+vpc_cidr = "10.20.0.0/16"
+
+# 비우면 리전에서 사용 가능한 AZ 2개를 자동 선택한다.
+# availability_zones = ["ap-northeast-2a", "ap-northeast-2c"]
+
+enable_nat_gateway = true
+single_nat_gateway = true # NAT 1개만 사용 (비용 절감)
+
+# 운영자 사무실/VPN 대역만 열어 준다. 비우면 SSH 규칙을 아예 만들지 않는다.
+# (권장: SSH 를 열지 않고 SSM Session Manager 로 접속)
+ssh_allowed_cidrs = []
+# ssh_allowed_cidrs = ["203.0.113.10/32"]
+
+alb_ingress_cidrs = ["0.0.0.0/0"]
+
+# ---------------- ALB / WAF ----------------
+enable_alb            = true
+alb_target_port       = 8080 # 8080 = Spring 직결 / 80 = EC2 nginx 경유(프론트 정적 서빙)
+# Redis 제외 헬스 그룹. ElastiCache 장애로 인스턴스가 통째로 빠지는 것을 막는다.
+alb_health_check_path = "/actuator/health/alb"
+
+# ACM 인증서를 발급했다면 ARN 을 넣는다. 넣으면 443 리스너가 생기고 80 은 리다이렉트된다.
+acm_certificate_arn = ""
+# acm_certificate_arn = "arn:aws:acm:ap-northeast-2:<ACCOUNT_ID>:certificate/<CERT_ID>"
+
+enable_waf                   = true
+waf_rate_limit_per_5min      = 2000 # IP 당 5분 2000요청 초과 시 차단
+waf_managed_rules_count_only = false
+
+# ---------------- EC2 ----------------
+instance_type         = "t3.small"
+instance_architecture = "x86_64" # t4g 계열을 쓰면 "arm64"
+public_app            = false    # 기본: 프라이빗 서브넷 + ALB 경유
+associate_elastic_ip  = false
+key_pair_name         = "" # 예: "imlate-prod-key"
+root_volume_size      = 30
+install_nginx            = true
+install_cloudwatch_agent = true
+
+# deploy.sh --mode ssm 을 쓸 때만 필요하다(버킷은 별도로 만들어 둔다).
+# 지정하면 EC2 역할에 해당 버킷 읽기 권한이 붙는다.
+artifact_bucket_name = "" # 예: "imlate-artifacts"
+
+# ---------------- RDS ----------------
+db_instance_class        = "db.t4g.micro"
+db_engine_version        = "8.0"
+db_name                  = "imlate"
+db_username              = "imlate_admin"
+db_allocated_storage     = 20
+db_max_allocated_storage = 100
+db_multi_az              = false
+db_backup_retention_days = 7
+db_deletion_protection   = true
+db_skip_final_snapshot   = false
+
+# 비워 두면(주석 유지) random_password 로 자동 생성되어 SSM SecureString 에 저장된다.
+# db_password = "<DB_PASSWORD>"
+
+# ---------------- ElastiCache ----------------
+redis_node_type                  = "cache.t4g.micro"
+redis_engine_version             = "7.1"
+redis_num_cache_clusters         = 1
+redis_multi_az_enabled           = false
+redis_transit_encryption_enabled = true
+redis_at_rest_encryption_enabled = true
+redis_auth_enabled               = true
+# redis_auth_token = "<REDIS_AUTH_TOKEN>"   # 비우면 자동 생성
+
+# ---------------- SES (메일) ----------------
+enable_ses = true
+
+# 도메인이면 DKIM CNAME 3건을 DNS 에 등록해야 한다(outputs.ses_dkim_dns_records).
+# 이메일 주소면 AWS 가 보낸 검증 메일을 클릭해야 한다.
+ses_identity = "<DOMAIN_OR_EMAIL>" # 예: "imlate.example.com" 또는 "no-reply@example.com"
+
+ses_from_address             = "" # 비우면 ses_identity 기준으로 자동 구성
+ses_from_name                = "기숙사 야간복귀 시스템"
+enable_ses_configuration_set = false
+
+# ---------------- 애플리케이션 URL ----------------
+# 커스텀 도메인을 쓰면 여기에 넣는다. 비우면 ALB DNS 이름이 사용된다.
+app_base_url   = "" # 예: "https://imlate.example.com"
+allowed_origin = "" # 비우면 app_base_url 과 동일
+
+# 비우면 자동 생성된다(terraform output -raw lookup_token_secret / admin_api_key 로 확인).
+# lookup_token_secret = "<LOOKUP_TOKEN_SECRET>"
+# admin_api_key       = "<ADMIN_API_KEY>"
+
+# ---------------- 문자 (알리고) ----------------
+aligo_api_key = "<ALIGO_API_KEY>"
+aligo_user_id = "<ALIGO_USER_ID>"
+aligo_sender  = "<ALIGO_SENDER_PHONE>" # 사전 등록된 발신번호. 예: "0212345678"
+
+# ---------------- 사감 연락처 ----------------
+supervisor1_name  = "<SUPERVISOR_1_NAME>"
+supervisor1_phone = "<SUPERVISOR_1_PHONE>" # 예: "01012345678"
+supervisor1_email = "<SUPERVISOR_1_EMAIL>"
+
+supervisor2_name  = "<SUPERVISOR_2_NAME>"
+supervisor2_phone = "<SUPERVISOR_2_PHONE>"
+supervisor2_email = "<SUPERVISOR_2_EMAIL>"

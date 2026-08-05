@@ -1,0 +1,424 @@
+#!/bin/bash
+# =====================================================================
+# imlate 애플리케이션 서버 부트스트랩 (Amazon Linux 2023)
+#
+#   이 파일은 Terraform templatefile() 로 렌더링된다.
+#   따라서 셸 변수는 "$VAR" 형태(중괄호 없이)로만 쓴다.
+#   중괄호가 필요하면 달러 기호를 두 번 써서 이스케이프해야 한다.
+#   달러+중괄호 표기는 전부 Terraform 이 치환하는 값이다.
+#
+#   수행 순서
+#     1) 시간대 / 패키지 설치 (corretto-21, awscli, python3, nginx, CW agent)
+#     2) imlate 사용자 · 디렉터리 생성
+#     3) 기본 환경변수 JSON 배치 + SSM 로더 스크립트 설치
+#     4) systemd 유닛 등록 (imlate-env.service → imlate.service)
+#     5) nginx 설정 배치 (프론트 dist 서빙 + /api 리버스 프록시)
+# =====================================================================
+set -euo pipefail
+exec > >(tee -a /var/log/imlate-bootstrap.log) 2>&1
+
+AWS_REGION="${aws_region}"
+SSM_PATH="${ssm_path_prefix}"
+APP_USER="${app_user}"
+APP_DIR="${app_dir}"
+JAR_PATH="${jar_path}"
+ENV_DIR="${env_dir}"
+ENV_FILE="${env_file}"
+LOG_DIR="${log_dir}"
+WEB_ROOT="${web_root}"
+APP_PORT="${app_port}"
+
+log() {
+  echo "[imlate-bootstrap] $(date -Is) $*"
+}
+
+log "부트스트랩 시작 (region=$AWS_REGION, ssm=$SSM_PATH)"
+
+# ---------------------------------------------------------------------
+# 1) 시간대 / 패키지
+# ---------------------------------------------------------------------
+timedatectl set-timezone "${timezone}" || log "시간대 설정 실패(무시)"
+
+install_packages() {
+  dnf -y install --allowerasing \
+    java-21-amazon-corretto-headless \
+    awscli-2 \
+    python3 \
+    tar \
+    gzip \
+    rsync
+}
+
+if ! install_packages; then
+  log "패키지 설치 1차 실패 — 15초 후 재시도"
+  sleep 15
+  install_packages
+fi
+
+log "java: $(java -version 2>&1 | head -n 1)"
+
+# ---------------------------------------------------------------------
+# 2) 사용자 / 디렉터리
+# ---------------------------------------------------------------------
+if ! id -u "$APP_USER" >/dev/null 2>&1; then
+  useradd --system --create-home --home-dir "/home/$APP_USER" --shell /sbin/nologin "$APP_USER"
+  log "시스템 사용자 생성: $APP_USER"
+fi
+
+install -d -o "$APP_USER" -g "$APP_USER" -m 0755 "$APP_DIR"
+install -d -o "$APP_USER" -g "$APP_USER" -m 0755 "$LOG_DIR"
+install -d -o root -g "$APP_USER" -m 0750 "$ENV_DIR"
+install -d -o root -g root -m 0755 "$WEB_ROOT"
+
+# ---------------------------------------------------------------------
+# 3) 기본 환경변수 + SSM 로더
+#
+#    SSM 에 값이 없을 때 애플리케이션이 기동조차 못 하는 상황을 막기 위해
+#    비민감 기본값을 먼저 깔고, SSM 값으로 덮어쓴다.
+#    (application-prod.yml 의 IMLATE_REDIS_PASSWORD 처럼 기본값이 없는
+#     플레이스홀더가 있으므로 빈 문자열이라도 반드시 존재해야 한다.)
+# ---------------------------------------------------------------------
+cat > "$ENV_DIR/defaults.env.json" <<'IMLATE_DEFAULTS'
+${default_env_json}
+IMLATE_DEFAULTS
+chown root:"$APP_USER" "$ENV_DIR/defaults.env.json"
+chmod 0640 "$ENV_DIR/defaults.env.json"
+
+cat > /usr/local/bin/imlate-load-env.sh <<'IMLATE_LOADER'
+#!/bin/bash
+# ---------------------------------------------------------------------
+# SSM Parameter Store → /etc/imlate/imlate.env
+#
+#   파라미터 이름의 마지막 세그먼트가 그대로 환경변수 이름이 된다.
+#     /imlate/prod/IMLATE_DB_URL  →  IMLATE_DB_URL
+#
+#   운영 중 값이 바뀌면:
+#     sudo systemctl restart imlate-env.service && sudo systemctl restart imlate
+# ---------------------------------------------------------------------
+set -euo pipefail
+
+AWS_REGION="${aws_region}"
+SSM_PATH="${ssm_path_prefix}"
+ENV_DIR="${env_dir}"
+ENV_FILE="${env_file}"
+APP_USER="${app_user}"
+DEFAULTS_FILE="$ENV_DIR/defaults.env.json"
+
+PARAMS_JSON="$(mktemp /tmp/imlate-params.XXXXXX)"
+RENDERED="$(mktemp /tmp/imlate-env.XXXXXX)"
+
+cleanup() {
+  rm -f "$PARAMS_JSON" "$RENDERED"
+}
+trap cleanup EXIT
+
+echo "[imlate-load-env] SSM 파라미터 조회: $SSM_PATH"
+
+aws ssm get-parameters-by-path \
+  --path "$SSM_PATH" \
+  --recursive \
+  --with-decryption \
+  --region "$AWS_REGION" \
+  --output json > "$PARAMS_JSON"
+
+python3 - "$PARAMS_JSON" "$DEFAULTS_FILE" "$RENDERED" <<'IMLATE_PY'
+import json
+import re
+import sys
+
+params_path, defaults_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
+
+env = {}
+try:
+    with open(defaults_path, encoding="utf-8") as fp:
+        for key, value in json.load(fp).items():
+            env[key] = "" if value is None else str(value)
+except (FileNotFoundError, ValueError):
+    pass
+
+with open(params_path, encoding="utf-8") as fp:
+    document = json.load(fp)
+
+key_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+for parameter in document.get("Parameters", []):
+    name = str(parameter.get("Name", "")).rsplit("/", 1)[-1]
+    if not key_pattern.match(name):
+        continue
+    value = parameter.get("Value", "")
+    env[name] = "" if value is None else str(value)
+
+def quoted(raw):
+    # systemd EnvironmentFile 규칙: 큰따옴표 안에서 백슬래시로 이스케이프
+    text = raw.replace("\\", "\\\\").replace('"', '\\"')
+    return '"' + text + '"'
+
+lines = ["# imlate-load-env.sh 가 SSM Parameter Store 에서 생성한 파일입니다. 직접 수정하지 마세요."]
+for key in sorted(env):
+    lines.append(key + "=" + quoted(env[key]))
+
+with open(out_path, "w", encoding="utf-8") as fp:
+    fp.write("\n".join(lines))
+    fp.write("\n")
+
+print(f"[imlate-load-env] 환경변수 {len(env)}건 준비 완료")
+IMLATE_PY
+
+install -o root -g "$APP_USER" -m 0640 "$RENDERED" "$ENV_FILE"
+echo "[imlate-load-env] 작성 완료: $ENV_FILE"
+IMLATE_LOADER
+chmod 0750 /usr/local/bin/imlate-load-env.sh
+
+# ---------------------------------------------------------------------
+# 4) systemd 유닛
+# ---------------------------------------------------------------------
+cat > /etc/systemd/system/imlate-env.service <<'IMLATE_ENV_UNIT'
+[Unit]
+Description=imlate 환경변수 로더 (SSM Parameter Store)
+Documentation=file:///usr/local/bin/imlate-load-env.sh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/imlate-load-env.sh
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
+IMLATE_ENV_UNIT
+
+cat > /etc/systemd/system/imlate.service <<'IMLATE_UNIT'
+[Unit]
+Description=imlate 기숙사 야간복귀 등록 서비스
+After=network-online.target imlate-env.service
+Wants=network-online.target
+Requires=imlate-env.service
+
+[Service]
+Type=simple
+User=${app_user}
+Group=${app_user}
+WorkingDirectory=${app_dir}
+EnvironmentFile=${env_file}
+Environment="JAVA_TOOL_OPTIONS=${jvm_opts}"
+ExecStart=/usr/bin/java -jar ${jar_path} --spring.profiles.active=${spring_profile}
+SuccessExitStatus=143
+Restart=always
+RestartSec=10
+TimeoutStopSec=40
+StandardOutput=append:${log_dir}/imlate.log
+StandardError=append:${log_dir}/imlate-error.log
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=${log_dir}
+
+[Install]
+WantedBy=multi-user.target
+IMLATE_UNIT
+
+cat > /etc/logrotate.d/imlate <<'IMLATE_LOGROTATE'
+${log_dir}/*.log {
+    daily
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su ${app_user} ${app_user}
+}
+IMLATE_LOGROTATE
+
+systemctl daemon-reload
+systemctl enable imlate-env.service
+systemctl enable imlate.service
+
+if /usr/local/bin/imlate-load-env.sh; then
+  log "환경변수 로드 완료"
+else
+  log "환경변수 로드 실패 — SSM 파라미터를 확인한 뒤 'systemctl restart imlate-env' 를 실행하세요"
+fi
+
+# ---------------------------------------------------------------------
+# 5) nginx (프론트 dist 정적 서빙 + /api 리버스 프록시)
+# ---------------------------------------------------------------------
+%{ if install_nginx ~}
+dnf -y install nginx || log "nginx 설치 실패"
+
+cat > "$WEB_ROOT/index.html" <<'IMLATE_PLACEHOLDER'
+<!doctype html>
+<meta charset="utf-8">
+<title>imlate</title>
+<p>배포 대기 중입니다. deploy.sh 로 프론트엔드 dist 를 업로드하세요.</p>
+IMLATE_PLACEHOLDER
+
+cat > /etc/nginx/conf.d/imlate.conf <<'IMLATE_NGINX'
+# imlate — 프론트 정적 서빙 + 백엔드 리버스 프록시
+# nginx.conf 기본 server 블록보다 먼저 로드되므로 이 블록이 default_server 가 된다.
+
+limit_req_zone $binary_remote_addr zone=imlate_api:10m rate=10r/s;
+limit_req_status 429;
+limit_conn_zone $binary_remote_addr zone=imlate_conn:10m;
+
+server {
+    listen       80 default_server;
+    listen       [::]:80 default_server;
+    server_name  _;
+
+    root  ${web_root};
+    index index.html;
+    charset utf-8;
+
+    client_max_body_size 1m;
+    client_body_timeout  10s;
+    client_header_timeout 10s;
+    limit_conn imlate_conn 40;
+
+    server_tokens off;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_comp_level 5;
+    gzip_proxied any;
+    gzip_types text/plain text/css text/javascript application/javascript application/json application/xml image/svg+xml font/woff font/woff2;
+
+    location /api/ {
+        limit_req zone=imlate_api burst=20 nodelay;
+
+        proxy_pass http://127.0.0.1:${app_port};
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout    30s;
+        proxy_read_timeout    30s;
+        proxy_buffering on;
+    }
+
+    # ALB / 내부 헬스체크만 허용
+    location /actuator/health {
+        allow 10.0.0.0/8;
+        allow 172.16.0.0/12;
+        allow 192.168.0.0/16;
+        allow 127.0.0.1;
+        deny all;
+
+        access_log off;
+        proxy_pass http://127.0.0.1:${app_port}/actuator/health;
+        proxy_set_header Host $host;
+    }
+
+    # 해시가 붙은 빌드 산출물은 오래 캐시
+    location /assets/ {
+        expires 30d;
+        add_header Cache-Control "public, max-age=2592000, immutable";
+        try_files $uri =404;
+    }
+
+    location ~* \.(?:js|css|woff2?|ttf|otf|png|jpg|jpeg|gif|svg|webp|ico)$ {
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800";
+        try_files $uri =404;
+    }
+
+    # SPA 진입점은 캐시하지 않는다(배포 즉시 반영)
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+IMLATE_NGINX
+
+if nginx -t; then
+  systemctl enable --now nginx
+  systemctl reload nginx || true
+  log "nginx 기동 완료"
+else
+  log "nginx 설정 검증 실패 — /etc/nginx/conf.d/imlate.conf 를 확인하세요"
+fi
+%{ endif ~}
+
+# ---------------------------------------------------------------------
+# 6) CloudWatch Agent (메모리/디스크 지표 + 애플리케이션 로그)
+# ---------------------------------------------------------------------
+%{ if install_cloudwatch_agent ~}
+if dnf -y install amazon-cloudwatch-agent; then
+  mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
+
+  cat > /opt/aws/amazon-cloudwatch-agent/etc/imlate-cwagent.json <<'IMLATE_CW'
+{
+  "agent": {
+    "metrics_collection_interval": 60,
+    "run_as_user": "root"
+  },
+  "metrics": {
+    "append_dimensions": {
+      "InstanceId": "{instance_id}"
+    },
+    "metrics_collected": {
+      "mem": {
+        "measurement": ["mem_used_percent"]
+      },
+      "disk": {
+        "measurement": ["used_percent"],
+        "resources": ["/"]
+      }
+    }
+  },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "${log_dir}/imlate.log",
+            "log_group_name": "/imlate/app",
+            "log_stream_name": "{instance_id}",
+            "timezone": "Local"
+          },
+          {
+            "file_path": "${log_dir}/imlate-error.log",
+            "log_group_name": "/imlate/app-error",
+            "log_stream_name": "{instance_id}",
+            "timezone": "Local"
+          }
+        ]
+      }
+    }
+  }
+}
+IMLATE_CW
+
+  /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+    -a fetch-config -m ec2 -s \
+    -c file:/opt/aws/amazon-cloudwatch-agent/etc/imlate-cwagent.json || log "CloudWatch Agent 설정 적용 실패(무시)"
+else
+  log "CloudWatch Agent 설치 실패(무시)"
+fi
+%{ endif ~}
+
+# ---------------------------------------------------------------------
+# 7) 애플리케이션 기동 (jar 이 이미 있는 경우에만)
+# ---------------------------------------------------------------------
+if [ -f "$JAR_PATH" ]; then
+  systemctl restart imlate.service || log "imlate 기동 실패 — journalctl -u imlate 확인"
+  log "imlate 서비스 기동 요청 완료"
+else
+  log "jar 이 없습니다: $JAR_PATH — infra/scripts/deploy.sh 로 배포한 뒤 자동으로 기동됩니다"
+fi
+
+log "부트스트랩 종료"

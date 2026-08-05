@@ -1,0 +1,57 @@
+# =====================================================================
+# imlate — systemd 서비스 유닛
+#
+#   배치 위치: /etc/systemd/system/imlate.service
+#   반영:      sudo systemctl daemon-reload && sudo systemctl restart imlate
+#
+#   전제 조건
+#     - /opt/imlate/imlate.jar        (deploy.sh 가 배치)
+#     - /etc/imlate/imlate.env        (imlate-env.service 가 SSM 에서 생성)
+#     - imlate 시스템 사용자 / /var/log/imlate 디렉터리
+#     - Amazon Corretto 21 (/usr/bin/java)
+#
+#   imlate-env.service 는 EC2 user_data 가 함께 설치하는 oneshot 유닛으로,
+#   SSM Parameter Store(/imlate/{env}/*) 를 읽어 EnvironmentFile 을 만든다.
+#   시크릿을 바꿨다면:
+#     sudo systemctl restart imlate-env.service && sudo systemctl restart imlate
+# =====================================================================
+
+[Unit]
+Description=imlate 기숙사 야간복귀 등록 서비스
+Documentation=https://github.com/skala/imlate
+After=network-online.target imlate-env.service
+Wants=network-online.target
+Requires=imlate-env.service
+
+[Service]
+Type=simple
+User=imlate
+Group=imlate
+WorkingDirectory=/opt/imlate
+
+EnvironmentFile=/etc/imlate/imlate.env
+Environment="JAVA_TOOL_OPTIONS=-Xms256m -Xmx1024m -XX:+UseSerialGC -Duser.timezone=Asia/Seoul -Dfile.encoding=UTF-8"
+
+ExecStart=/usr/bin/java -jar /opt/imlate/imlate.jar --spring.profiles.active=prod
+
+# Spring Boot 의 graceful shutdown(SIGTERM) 정상 종료 코드
+SuccessExitStatus=143
+
+Restart=always
+RestartSec=10
+TimeoutStopSec=40
+
+StandardOutput=append:/var/log/imlate/imlate.log
+StandardError=append:/var/log/imlate/imlate-error.log
+
+LimitNOFILE=65536
+
+# 최소 권한
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/log/imlate
+
+[Install]
+WantedBy=multi-user.target

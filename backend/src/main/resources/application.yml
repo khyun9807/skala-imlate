@@ -1,0 +1,227 @@
+# =====================================================================
+# imlate 공통 설정 (모든 프로파일 공통 기본값)
+#
+# R10: 인프라·외부 의존성이 바뀌어도 "설정 파일/환경변수만" 고치면 되도록
+#      호스트·포트·키·리전을 전부 프로퍼티화한다.
+#      비밀값은 ${ENV_VAR:기본값} 플레이스홀더로 두고, 실제 값은
+#      환경변수 또는 ./config/application-secret.yml 로 주입한다.
+# =====================================================================
+
+spring:
+  application:
+    name: imlate
+
+  # 프로파일은 실행 시점에 지정한다(여기서 고정하지 않는다 — 테스트의 @ActiveProfiles 와 충돌 방지).
+  #   로컬:  --spring.profiles.active=local   (또는 SPRING_PROFILES_ACTIVE=local)
+  #   운영:  --spring.profiles.active=prod
+  # 프로파일 없이 실행해도 아래 기본값만으로 동작한다(localhost MySQL/Redis + noop 발송).
+
+  # 운영자가 채워 넣는 비밀 설정 파일(없으면 무시). .gitignore 대상.
+  config:
+    import: "optional:file:./config/application-secret.yml"
+
+  # ---------------- DataSource (MySQL 8 / AWS RDS) ----------------
+  datasource:
+    url: "${IMLATE_DB_URL:jdbc:mysql://localhost:3306/imlate?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Seoul&characterEncoding=UTF-8&rewriteBatchedStatements=true}"
+    username: "${IMLATE_DB_USERNAME:imlate}"
+    password: "${IMLATE_DB_PASSWORD:imlate}"
+    hikari:
+      pool-name: imlate-hikari
+      maximum-pool-size: ${IMLATE_DB_POOL_MAX:10}
+      minimum-idle: ${IMLATE_DB_POOL_MIN_IDLE:2}
+      connection-timeout: ${IMLATE_DB_CONNECTION_TIMEOUT_MS:5000}
+      idle-timeout: 300000
+      max-lifetime: 1140000
+
+  # ---------------- JPA / Hibernate ----------------
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: ${IMLATE_JPA_DDL_AUTO:validate}
+    show-sql: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: Asia/Seoul
+          batch_size: 30
+        order_inserts: true
+        format_sql: false
+
+  # ---------------- Flyway 마이그레이션 ----------------
+  flyway:
+    enabled: ${IMLATE_FLYWAY_ENABLED:true}
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    validate-on-migrate: true
+
+  # ---------------- Redis (WAL / rate limit / stats) ----------------
+  data:
+    redis:
+      host: "${IMLATE_REDIS_HOST:localhost}"
+      port: ${IMLATE_REDIS_PORT:6379}
+      password: "${IMLATE_REDIS_PASSWORD:}"
+      database: ${IMLATE_REDIS_DATABASE:0}
+      timeout: ${IMLATE_REDIS_TIMEOUT:2000ms}
+      connect-timeout: ${IMLATE_REDIS_CONNECT_TIMEOUT:2000ms}
+      client-name: imlate
+      ssl:
+        enabled: ${IMLATE_REDIS_SSL_ENABLED:false}
+      lettuce:
+        shutdown-timeout: 200ms
+        pool:
+          enabled: true
+          max-active: ${IMLATE_REDIS_POOL_MAX_ACTIVE:16}
+          max-idle: ${IMLATE_REDIS_POOL_MAX_IDLE:8}
+          min-idle: ${IMLATE_REDIS_POOL_MIN_IDLE:1}
+          max-wait: 1000ms
+
+  mvc:
+    problemdetails:
+      enabled: false
+
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+# ---------------- 서버 (교육생 200명 규모에 충분) ----------------
+server:
+  port: ${IMLATE_SERVER_PORT:8080}
+  shutdown: graceful
+  forward-headers-strategy: ${IMLATE_FORWARD_HEADERS_STRATEGY:none}
+  error:
+    include-message: never
+    include-stacktrace: never
+    include-binding-errors: never
+  tomcat:
+    threads:
+      max: 100
+      min-spare: 10
+    accept-count: 100
+    max-connections: 2000
+    connection-timeout: 5s
+    uri-encoding: UTF-8
+
+# ---------------- Actuator ----------------
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+      group:
+        # ALB/로드밸런서 전용 헬스 그룹 (/actuator/health/alb).
+        # Redis 는 일부러 제외한다 — WAL/통계/rate limit 은 Redis 없이도 성능 저하만 되고
+        # 등록 자체는 계속 처리되므로(가용성 우선 설계), ElastiCache 장애로 인스턴스를
+        # 서비스에서 빼면 오히려 서비스 전체가 죽는다. DB 는 등록에 필수이므로 포함한다.
+        alb:
+          include: db, ping
+          show-details: never
+  info:
+    env:
+      enabled: false
+
+logging:
+  level:
+    root: INFO
+    com.skala.imlate: INFO
+
+# =====================================================================
+# imlate 서비스 설정
+# =====================================================================
+imlate:
+  timezone: "${IMLATE_TIMEZONE:Asia/Seoul}"
+
+  # 등록 창: [open-time, close-time) — 22:00 정각부터 등록 거부
+  registration:
+    open-time: "00:00"
+    close-time: "${IMLATE_REGISTRATION_CLOSE_TIME:22:00}"
+    return-time: "${IMLATE_REGISTRATION_RETURN_TIME:23:30}"
+    curfew-time: "${IMLATE_REGISTRATION_CURFEW_TIME:22:30}"
+    max-name-length: 20
+    max-room-length: 20
+
+  # Redis WAL (R7: DB 기록 전 선행 로깅)
+  wal:
+    key-prefix: "imlate:wal"
+    ttl-days: ${IMLATE_WAL_TTL_DAYS:7}
+
+  # 사감 조회 페이지 (R8, R9)
+  lookup:
+    base-url: "${IMLATE_LOOKUP_BASE_URL:http://localhost:5173}"
+    token-secret: "${IMLATE_LOOKUP_TOKEN_SECRET:}"
+    token-ttl-hours: ${IMLATE_LOOKUP_TOKEN_TTL_HOURS:48}
+
+  # 관리 API 보호 키 (X-Admin-Key)
+  admin:
+    api-key: "${IMLATE_ADMIN_API_KEY:}"
+
+  # CORS 허용 오리진
+  web:
+    allowed-origins:
+      - "${IMLATE_WEB_ALLOWED_ORIGIN_1:http://localhost:5173}"
+      - "${IMLATE_WEB_ALLOWED_ORIGIN_2:http://localhost:4173}"
+
+  # 사감 발송 (R3, R9) — 22:10 발송, 실패분 22:25/22:40 재시도
+  notification:
+    enabled: ${IMLATE_NOTIFICATION_ENABLED:true}
+    dispatch-cron: "${IMLATE_NOTIFICATION_DISPATCH_CRON:0 10 22 * * *}"
+    retry-cron: "${IMLATE_NOTIFICATION_RETRY_CRON:0 25,40 22 * * *}"
+    max-attempts: ${IMLATE_NOTIFICATION_MAX_ATTEMPTS:3}
+    lock-ttl-seconds: ${IMLATE_NOTIFICATION_LOCK_TTL_SECONDS:300}
+    # 사감 2명. 실제 연락처는 환경변수 또는 application-secret.yml 로 주입한다.
+    supervisors:
+      - name: "${IMLATE_SUPERVISOR1_NAME:사감A}"
+        phone: "${IMLATE_SUPERVISOR1_PHONE:}"
+        email: "${IMLATE_SUPERVISOR1_EMAIL:}"
+      - name: "${IMLATE_SUPERVISOR2_NAME:사감B}"
+        phone: "${IMLATE_SUPERVISOR2_PHONE:}"
+        email: "${IMLATE_SUPERVISOR2_EMAIL:}"
+
+  # 문자 발송 (R11) — aligo | noop
+  sms:
+    provider: "${IMLATE_SMS_PROVIDER:noop}"
+    aligo:
+      api-url: "${IMLATE_ALIGO_API_URL:https://apis.aligo.in/send/}"
+      api-key: "${IMLATE_ALIGO_API_KEY:}"
+      user-id: "${IMLATE_ALIGO_USER_ID:}"
+      sender: "${IMLATE_ALIGO_SENDER:}"
+      test-mode: ${IMLATE_ALIGO_TEST_MODE:true}
+      connect-timeout-ms: 3000
+      read-timeout-ms: 5000
+
+  # 이메일 발송 (R11) — ses | noop
+  email:
+    provider: "${IMLATE_EMAIL_PROVIDER:noop}"
+    ses:
+      region: "${IMLATE_SES_REGION:ap-northeast-2}"
+      from: "${IMLATE_SES_FROM:}"
+      from-name: "${IMLATE_SES_FROM_NAME:기숙사 야간복귀 시스템}"
+      configuration-set: "${IMLATE_SES_CONFIGURATION_SET:}"
+
+  # Rate limit (R14) — 200명 규모 기준 기본값
+  rate-limit:
+    enabled: ${IMLATE_RATE_LIMIT_ENABLED:true}
+    fail-open: ${IMLATE_RATE_LIMIT_FAIL_OPEN:true}
+    global:
+      capacity: 120
+      refill-tokens: 120
+      refill-period-seconds: 60
+    register:
+      capacity: 8
+      refill-tokens: 8
+      refill-period-seconds: 60
+    lookup:
+      capacity: 40
+      refill-tokens: 40
+      refill-period-seconds: 60
+    trusted-proxies: []
+    local-fallback-permits-per-minute: 120
+
+  # 통계 (R15)
+  stats:
+    enabled: ${IMLATE_STATS_ENABLED:true}
+    retention-days: ${IMLATE_STATS_RETENTION_DAYS:400}
+    snapshot-cron: "${IMLATE_STATS_SNAPSHOT_CRON:0 5 0 * * *}"

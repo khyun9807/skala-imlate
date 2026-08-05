@@ -1,0 +1,166 @@
+# =====================================================================
+# 테스트 전용 설정 (프로파일: test)
+#
+# 원칙
+#  - 외부 인프라(도커/Testcontainers/실 Redis/실 MySQL)에 의존하지 않는다.
+#  - DB 는 H2 (MySQL 모드) 인메모리 + Flyway 비활성 + ddl-auto create-drop.
+#  - Redis 는 연결하지 않는다. 컨텍스트 테스트는 RedisConnectionFactory 를 목으로 대체한다.
+#  - 문자/이메일은 noop, rate limit·통계·사감 발송은 모두 비활성.
+#  - 스케줄러 cron 은 "-"(Scheduled.CRON_DISABLED) 로 두어 테스트 중 절대 실행되지 않게 한다.
+# =====================================================================
+
+spring:
+  # 리액티브 Redis 는 이 서비스에서 쓰지 않는다. 그런데 자동설정이 남아 있으면
+  # 목으로 대체한 RedisConnectionFactory 가 ReactiveRedisConnectionFactory 가 아니라서
+  # reactiveRedisTemplate 생성이 실패한다. 테스트에서는 아예 제외한다.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration
+
+  datasource:
+    url: "jdbc:h2:mem:imlate;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE"
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+    hikari:
+      pool-name: imlate-test-hikari
+      maximum-pool-size: 2
+      minimum-idle: 1
+      connection-timeout: 5000
+
+  jpa:
+    open-in-view: false
+    show-sql: false
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: Asia/Seoul
+        format_sql: false
+
+  # 테스트에서는 마이그레이션을 돌리지 않는다(스키마는 ddl-auto 가 만든다).
+  flyway:
+    enabled: false
+
+  sql:
+    init:
+      mode: never
+
+  # 실제 Redis 에 붙지 않는다. 커넥션 팩토리는 테스트에서 목으로 교체한다.
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 200ms
+      connect-timeout: 200ms
+      lettuce:
+        pool:
+          enabled: false
+
+server:
+  port: 0
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  health:
+    # RedisConnectionFactory 를 목으로 대체하면 Actuator 의 Redis 헬스 기여자가
+    # 빈 목록으로 생성되어 컨텍스트 기동이 실패한다("Beans must not be empty").
+    # 테스트는 실제 Redis 에 붙지 않으므로 Redis 헬스체크 자체를 끈다.
+    redis:
+      enabled: false
+
+logging:
+  level:
+    root: WARN
+    com.skala.imlate: INFO
+    org.springframework: WARN
+    org.hibernate: WARN
+
+# =====================================================================
+# imlate 서비스 설정 (테스트 값)
+# =====================================================================
+imlate:
+  timezone: "Asia/Seoul"
+
+  registration:
+    open-time: "00:00"
+    close-time: "22:00"
+    return-time: "23:30"
+    curfew-time: "22:30"
+    max-name-length: 20
+    max-room-length: 20
+
+  wal:
+    key-prefix: "imlate:test:wal"
+    ttl-days: 1
+
+  lookup:
+    base-url: "https://imlate.example.com"
+    token-secret: "imlate-test-token-secret-0123456789"
+    token-ttl-hours: 48
+
+  admin:
+    api-key: "test-admin-key"
+
+  web:
+    allowed-origins:
+      - "http://localhost:5173"
+
+  # 사감 발송 비활성 + 스케줄 비활성("-" = Scheduled.CRON_DISABLED)
+  notification:
+    enabled: false
+    dispatch-cron: "-"
+    retry-cron: "-"
+    max-attempts: 1
+    lock-ttl-seconds: 60
+    supervisors:
+      - name: "테스트 사감"
+        phone: "01000000000"
+        email: "supervisor@example.com"
+
+  sms:
+    provider: "noop"
+    aligo:
+      api-url: "https://apis.aligo.in/send/"
+      api-key: ""
+      user-id: ""
+      sender: ""
+      test-mode: true
+      connect-timeout-ms: 1000
+      read-timeout-ms: 1000
+
+  email:
+    provider: "noop"
+    ses:
+      region: "ap-northeast-2"
+      from: "noreply@example.com"
+      from-name: "기숙사 야간복귀 시스템(테스트)"
+      configuration-set: ""
+
+  rate-limit:
+    enabled: false
+    fail-open: true
+    global:
+      capacity: 120
+      refill-tokens: 120
+      refill-period-seconds: 60
+    register:
+      capacity: 8
+      refill-tokens: 8
+      refill-period-seconds: 60
+    lookup:
+      capacity: 40
+      refill-tokens: 40
+      refill-period-seconds: 60
+    trusted-proxies: []
+    local-fallback-permits-per-minute: 120
+
+  stats:
+    enabled: false
+    retention-days: 30
+    snapshot-cron: "-"
+    today-snapshot-cron: "-"

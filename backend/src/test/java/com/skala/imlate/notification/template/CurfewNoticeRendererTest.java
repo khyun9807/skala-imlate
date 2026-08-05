@@ -1,0 +1,252 @@
+package com.skala.imlate.notification.template;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import com.skala.imlate.registration.service.ReconciliationReport;
+import com.skala.imlate.support.TestFixtures;
+
+/**
+ * {@link CurfewNoticeRenderer} 단위 테스트.
+ *
+ * <p>요구사항 R4/R9 에 따라 문자·이메일 본문에 <b>반·이름·호수</b>, 23:30 복귀 안내, 22:30 통금 안내,
+ * 조회 페이지 URL 이 반드시 포함되어야 한다. 빈 명단에서도 예외 없이 렌더링되어야 한다.
+ */
+@DisplayName("사감 안내문 렌더러(CurfewNoticeRenderer)")
+class CurfewNoticeRendererTest {
+
+    private static final String LOOKUP_URL =
+            TestFixtures.LOOKUP_BASE_URL + "/lookup?date=2026-08-05&token=TEST-TOKEN";
+
+    private final CurfewNoticeRenderer renderer = new CurfewNoticeRenderer();
+
+    /** 3개 반에 걸친 12명 샘플 명단(반 → 이름 정렬 순서). */
+    private static List<NoticePayload.Row> sampleRows() {
+        List<NoticePayload.Row> rows = new ArrayList<>();
+        rows.add(new NoticePayload.Row(1, "1반", "김가영", "301"));
+        rows.add(new NoticePayload.Row(2, "1반", "남궁민수", "302"));
+        rows.add(new NoticePayload.Row(3, "1반", "박준호", "305"));
+        rows.add(new NoticePayload.Row(4, "1반", "홍길동", "302"));
+        rows.add(new NoticePayload.Row(5, "2반", "Alice Kim", "410"));
+        rows.add(new NoticePayload.Row(6, "2반", "서지우", "411"));
+        rows.add(new NoticePayload.Row(7, "2반", "이수민", "412"));
+        rows.add(new NoticePayload.Row(8, "2반", "정예린", "410"));
+        rows.add(new NoticePayload.Row(9, "3반", "최민재", "A-201"));
+        rows.add(new NoticePayload.Row(10, "3반", "한도윤", "A-202"));
+        rows.add(new NoticePayload.Row(11, "3반", "황보름", "A-203"));
+        rows.add(new NoticePayload.Row(12, "3반", "Bob Lee", "A-204"));
+        return rows;
+    }
+
+    private static NoticePayload samplePayload() {
+        return new NoticePayload(TestFixtures.DATE, sampleRows(), LOOKUP_URL,
+                TestFixtures.RETURN_TIME, TestFixtures.CURFEW_TIME,
+                TestFixtures.consistentReport(TestFixtures.DATE, 12L), TestFixtures.stats());
+    }
+
+    // ------------------------------------------------------------------
+    // 문자
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("문자 제목은 날짜·복귀 시각·인원 수를 요약한다")
+    void 문자_제목() {
+        assertThat(renderer.smsTitle(samplePayload())).isEqualTo("[기숙사] 8/5 23:30 복귀 12명");
+    }
+
+    @Test
+    @DisplayName("문자 본문에 12명의 반·이름·호수와 23:30 / 22:30 안내, 조회 URL 이 모두 들어간다")
+    void 문자_본문에_명단과_안내가_모두_포함된다() {
+        NoticePayload payload = samplePayload();
+
+        String body = renderer.smsBody(payload);
+
+        assertThat(body).contains("[기숙사 야간복귀 명단]");
+        assertThat(body).contains("8월 5일");
+        assertThat(body).contains("12명");
+
+        // 반 · 이름 · 호수
+        assertThat(body).contains("1반", "2반", "3반");
+        for (NoticePayload.Row row : payload.rows()) {
+            assertThat(body).contains(row.studentName());
+            assertThat(body).contains(row.roomNumber());
+        }
+
+        // 시각 안내(원래 통금 22:30 → 23:30 일괄 개방)
+        assertThat(body).contains("22:30");
+        assertThat(body).contains("23:30");
+        assertThat(body).contains("일괄 개방");
+
+        // 검증·통계 요약과 조회 URL
+        assertThat(body).contains("검증: DB 12 / WAL 12 (일치)");
+        assertThat(body).contains("통계:");
+        assertThat(body).contains(LOOKUP_URL);
+    }
+
+    @Test
+    @DisplayName("반별 인원 수가 문자 본문에 표기된다")
+    void 문자_본문에_반별_인원이_표기된다() {
+        String body = renderer.smsBody(samplePayload());
+
+        assertThat(body).contains("· 1반 (4명)");
+        assertThat(body).contains("· 2반 (4명)");
+        assertThat(body).contains("· 3반 (4명)");
+    }
+
+    // ------------------------------------------------------------------
+    // 이메일
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("이메일 제목에 대상일과 인원 수가 들어간다")
+    void 이메일_제목() {
+        String subject = renderer.emailSubject(samplePayload());
+
+        assertThat(subject).startsWith("[기숙사 야간복귀]");
+        assertThat(subject).contains("8월 5일");
+        assertThat(subject).contains("23:30");
+        assertThat(subject).contains("12명");
+    }
+
+    @Test
+    @DisplayName("이메일 텍스트 본문은 고정폭 표에 반·이름·호수를 담고 통계·검증·URL 을 포함한다")
+    void 이메일_텍스트_본문() {
+        NoticePayload payload = samplePayload();
+
+        String text = renderer.emailText(payload);
+
+        assertThat(text).contains("[복귀 명단]");
+        assertThat(text).contains("번호").contains("이름").contains("호수");
+        for (NoticePayload.Row row : payload.rows()) {
+            assertThat(text).contains(row.className());
+            assertThat(text).contains(row.studentName());
+            assertThat(text).contains(row.roomNumber());
+        }
+        assertThat(text).contains("23:30");
+        assertThat(text).contains("22:30");
+        assertThat(text).contains("[검증 결과 - Redis WAL <-> DB 대사]");
+        assertThat(text).contains("[통계]");
+        assertThat(text).contains(LOOKUP_URL);
+    }
+
+    @Test
+    @DisplayName("이메일 텍스트 본문에는 줄 끝 공백이 없다(고정폭 표 정렬 품질)")
+    void 이메일_텍스트에_줄끝_공백이_없다() {
+        String text = renderer.emailText(samplePayload());
+
+        for (String line : text.split("\n", -1)) {
+            assertThat(line).as("줄 끝 공백: [%s]", line).doesNotEndWith(" ");
+        }
+    }
+
+    @Test
+    @DisplayName("이메일 HTML 본문은 UTF-8 을 명시하고 표·조회 링크·명단을 포함한다")
+    void 이메일_HTML_본문() {
+        NoticePayload payload = samplePayload();
+
+        String html = renderer.emailHtml(payload);
+
+        assertThat(html).contains("charset=\"UTF-8\"");
+        assertThat(html).contains("<table");
+        assertThat(html).contains("/lookup?date=2026-08-05");
+        assertThat(html).contains("23:30");
+        assertThat(html).contains("22:30");
+        for (NoticePayload.Row row : payload.rows()) {
+            assertThat(html).contains(row.studentName());
+            assertThat(html).contains(row.roomNumber());
+        }
+    }
+
+    @Test
+    @DisplayName("이름에 HTML 특수문자가 있어도 이스케이프되어 그대로 삽입되지 않는다")
+    void HTML_특수문자는_이스케이프된다() {
+        NoticePayload payload = new NoticePayload(TestFixtures.DATE,
+                List.of(new NoticePayload.Row(1, "1반", "<script>", "302")), LOOKUP_URL,
+                TestFixtures.RETURN_TIME, TestFixtures.CURFEW_TIME, null, null);
+
+        String html = renderer.emailHtml(payload);
+
+        assertThat(html).doesNotContain("<script>");
+        assertThat(html).contains("&lt;script&gt;");
+    }
+
+    // ------------------------------------------------------------------
+    // 경계 상황
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("빈 명단에서도 세 가지 본문이 예외 없이 렌더링된다")
+    void 빈_명단도_안전하게_렌더링된다() {
+        NoticePayload empty = new NoticePayload(TestFixtures.DATE, List.of(), LOOKUP_URL,
+                TestFixtures.RETURN_TIME, TestFixtures.CURFEW_TIME,
+                TestFixtures.consistentReport(TestFixtures.DATE, 0L), TestFixtures.stats());
+
+        assertThatCode(() -> {
+            renderer.smsTitle(empty);
+            renderer.smsBody(empty);
+            renderer.emailSubject(empty);
+            renderer.emailText(empty);
+            renderer.emailHtml(empty);
+        }).doesNotThrowAnyException();
+
+        assertThat(renderer.smsTitle(empty)).isEqualTo("[기숙사] 8/5 23:30 복귀 0명");
+        assertThat(renderer.smsBody(empty)).contains("등록된 인원이 없습니다.");
+        assertThat(renderer.emailText(empty)).contains("등록된 인원이 없습니다.");
+        assertThat(renderer.emailHtml(empty)).contains("등록된 인원이 없습니다.");
+    }
+
+    @Test
+    @DisplayName("검증·통계 정보를 가져오지 못해도(null) 예외 없이 '확인 불가' 로 표기한다")
+    void 검증과_통계가_없어도_렌더링된다() {
+        NoticePayload payload = new NoticePayload(TestFixtures.DATE, sampleRows(), LOOKUP_URL,
+                TestFixtures.RETURN_TIME, TestFixtures.CURFEW_TIME, null, null);
+
+        String sms = renderer.smsBody(payload);
+        String text = renderer.emailText(payload);
+        String html = renderer.emailHtml(payload);
+
+        assertThat(sms).contains("검증: 확인 불가");
+        assertThat(sms).contains("통계: 확인 불가");
+        assertThat(text).contains("검증 정보를 가져오지 못했습니다");
+        assertThat(text).contains("통계 정보를 가져오지 못했습니다");
+        assertThat(html).contains("검증 정보를 가져오지 못했습니다");
+    }
+
+    @Test
+    @DisplayName("복구(RECOVERED) 결과도 문자 요약에 반영된다")
+    void 복구_결과가_요약에_반영된다() {
+        ReconciliationReport recovered = new ReconciliationReport(TestFixtures.DATE,
+                ReconciliationReport.STATUS_RECOVERED, 12L, 12L, 1L, List.of(), List.of(),
+                TestFixtures.checkedAt(TestFixtures.DATE));
+        NoticePayload payload = new NoticePayload(TestFixtures.DATE, sampleRows(), LOOKUP_URL,
+                TestFixtures.RETURN_TIME, TestFixtures.CURFEW_TIME, recovered, TestFixtures.stats());
+
+        assertThat(renderer.smsBody(payload)).contains("검증: DB 12 / WAL 12 (복구 완료)");
+    }
+
+    @Test
+    @DisplayName("명단이 200명이면 문자 본문이 반별 요약 모드로 자동 전환된다")
+    void 명단이_길면_반별_요약으로_전환된다() {
+        List<NoticePayload.Row> many = new ArrayList<>();
+        for (int i = 1; i <= 200; i++) {
+            many.add(new NoticePayload.Row(i, (i % 5 + 1) + "반", "교육생" + i, String.valueOf(300 + i)));
+        }
+        NoticePayload payload = new NoticePayload(TestFixtures.DATE, many, LOOKUP_URL,
+                TestFixtures.RETURN_TIME, TestFixtures.CURFEW_TIME,
+                TestFixtures.consistentReport(TestFixtures.DATE, 200L), TestFixtures.stats());
+
+        String body = renderer.smsBody(payload);
+
+        assertThat(body).contains("200명");
+        assertThat(body).contains("명단이 길어");
+        assertThat(body).contains(LOOKUP_URL);
+        // 요약 모드에서는 개별 이름을 넣지 않는다.
+        assertThat(body).doesNotContain("교육생100");
+    }
+}
