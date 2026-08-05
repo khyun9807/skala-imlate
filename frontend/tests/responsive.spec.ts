@@ -54,6 +54,14 @@ async function openRegisterPage(page: Page, options: MockOptions = {}): Promise<
   await settle(page)
 }
 
+/** 취소 화면을 열고 그려질 때까지 기다린다. */
+async function openCancelPage(page: Page, options: MockOptions = {}): Promise<void> {
+  await installApiMocks(page, options)
+  await page.goto('/cancel')
+  await expect(page.getByRole('heading', { level: 1, name: '야간 복귀 등록 취소' })).toBeVisible()
+  await settle(page)
+}
+
 /** 조회 화면을 열고 명단이 그려질 때까지 기다린다. */
 async function openLookupPage(page: Page, options: MockOptions = {}): Promise<void> {
   await installApiMocks(page, options)
@@ -114,6 +122,48 @@ test.describe('등록 화면(/) 반응형', () => {
       await expect(page.getByLabel('기숙사 호수')).toBeVisible()
       await expect(page.getByRole('button', { name: `${RETURN_TIME_LABEL} 복귀 등록하기` })).toBeVisible()
       await expect(page.getByText(`${CURFEW_TIME_LABEL} 문 잠김`)).toBeVisible()
+
+      await assertResponsive(page, viewport.width)
+    })
+  }
+})
+
+test.describe('취소 화면(/cancel) 반응형', () => {
+  for (const viewport of VIEWPORTS) {
+    test(`${viewport.name} 에서 넘침·잘림 없이 표시된다`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height })
+      await openCancelPage(page)
+
+      await expect(page.getByRole('heading', { level: 1, name: '야간 복귀 등록 취소' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: '취소할 등록 정보' })).toBeVisible()
+      await expect(page.getByLabel('반')).toBeVisible()
+      await expect(page.getByLabel('이름')).toBeVisible()
+      await expect(page.getByLabel('기숙사 호수')).toBeVisible()
+      await expect(page.getByLabel('취소 비밀번호')).toBeVisible()
+      await expect(page.getByRole('button', { name: '등록 취소하기' })).toBeVisible()
+
+      await assertResponsive(page, viewport.width)
+    })
+  }
+})
+
+test.describe('취소 확인 단계 반응형', () => {
+  // 확인 문구에는 반·이름·호수가 한 줄로 들어가므로 20자짜리 최악 케이스에서 특히 넘치기 쉽다.
+  const stateViewports = VIEWPORTS.filter((viewport) => [320, 390, 768, 1280, 1920].includes(viewport.width))
+
+  for (const viewport of stateViewports) {
+    test(`20자 최대 길이 취소 확인 — ${viewport.name}`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height })
+      await openCancelPage(page)
+
+      await page.getByLabel('반').fill(LONG_INPUT.className)
+      await page.getByLabel('이름').fill(LONG_INPUT.studentName)
+      await page.getByLabel('기숙사 호수').fill(LONG_INPUT.roomNumber)
+      await page.getByLabel('취소 비밀번호').fill('1234')
+      await page.getByRole('button', { name: '등록 취소하기' }).click()
+
+      await expect(page.getByText('아래 등록을 취소합니다')).toBeVisible()
+      await settle(page)
 
       await assertResponsive(page, viewport.width)
     })
@@ -186,6 +236,7 @@ test.describe('상태 화면 반응형', () => {
       await page.getByLabel('반').fill(LONG_INPUT.className)
       await page.getByLabel('이름').fill(LONG_INPUT.studentName)
       await page.getByLabel('기숙사 호수').fill(LONG_INPUT.roomNumber)
+      await page.getByLabel('취소 비밀번호').fill('1234')
       await page.getByRole('button', { name: `${RETURN_TIME_LABEL} 복귀 등록하기` }).click()
 
       await expect(page.getByRole('heading', { name: '등록이 완료되었습니다' })).toBeVisible()
@@ -202,6 +253,7 @@ test.describe('상태 화면 반응형', () => {
       await page.getByLabel('반').fill('1반')
       await page.getByLabel('이름').fill('홍길동')
       await page.getByLabel('기숙사 호수').fill('302')
+      await page.getByLabel('취소 비밀번호').fill('1234')
       await page.getByRole('button', { name: `${RETURN_TIME_LABEL} 복귀 등록하기` }).click()
 
       await expect(page.getByRole('alert')).toContainText('요청이 너무 많습니다.')

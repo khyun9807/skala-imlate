@@ -269,8 +269,27 @@ const STUDENTS = [
   ['4반', '오유진', '601'], ['4반', 'Alice Kim', '602'], ['4반', '남궁민수', 'B-101'],
 ]
 
+/**
+ * 모든 등록이 쓰는 기본 취소 비밀번호.
+ *
+ * 시나리오마다 다른 값을 쓰면 "어느 등록이 어느 비밀번호였는지" 추적하느라 테스트가 복잡해진다.
+ * 비밀번호가 실제로 검증되는지는 13-1 절에서 <b>다른 값</b>을 넣어 따로 확인한다.
+ */
+const CANCEL_PASSWORD = '2468'
+
 async function register(className, studentName, roomNumber, opts = {}) {
-  return req('POST', '/registrations', { body: { className, studentName, roomNumber }, ...opts })
+  const { cancelPassword = CANCEL_PASSWORD, ...rest } = opts
+  return req('POST', '/registrations', {
+    body: { className, studentName, roomNumber, cancelPassword },
+    ...rest,
+  })
+}
+
+async function cancel(className, studentName, roomNumber, password = CANCEL_PASSWORD, opts = {}) {
+  return req('POST', '/registrations/cancel', {
+    body: { className, studentName, roomNumber, password },
+    ...opts,
+  })
 }
 
 // ── 사전 점검 ────────────────────────────────────────────────────────────────
@@ -453,7 +472,9 @@ async function run() {
   }
 
   // 3-2) ★ 같은 IP · 같은 사람 반복 → 429 로 막혀야 한다 (개인 식별자 버킷)
-  const SPAM = { className: '9반', studentName: '도배사용자', roomNumber: 'RL904' }
+  // 본문은 반드시 **검증을 통과하는** 값이어야 한다. 필수 항목(취소 비밀번호)이 빠지면
+  // 컨트롤러의 @Valid 가 400 으로 먼저 잘라내서, 정작 보려던 rate limit 판정에 닿지 못한다.
+  const SPAM = { className: '9반', studentName: '도배사용자', roomNumber: 'RL904', cancelPassword: CANCEL_PASSWORD }
   let spamFirst = null
   let spamBlocked = null
   let spamAttempts = 0
@@ -806,6 +827,105 @@ async function run() {
   check('잘못된 키 → 401',
     (await req('POST', `/admin/notifications/dispatch?date=${TODAY}`, { headers: { 'X-Admin-Key': 'wrong' } })).status === 401)
   check('이력 조회는 키가 있어야 200', (await admin(`/admin/notifications?date=${TODAY}`, 'GET')).status === 200)
+
+  // ---------------------------------------------------------------- 13-1
+  //
+  // 취소는 **남의 등록을 지울 수 있는 유일한 경로**다. 명단에서 빠진 교육생은 22:30 에 문이 잠기면
+  // 밖에서 밤을 새게 되므로, "잘못 취소되는 것"이 "취소가 안 되는 것"보다 훨씬 나쁜 실패다.
+  // 그래서 여기서는 성공 경로보다 **막히는 경로**를 더 촘촘히 본다.
+  section('13-1. 등록 취소 (비밀번호 본인 확인)')
+  clearRateLimit()
+
+  const CANCEL_TARGET = ['9반', '취소테스트', '901']
+  const beforeCancelCount = Number(mysql(
+    `SELECT COUNT(*) FROM return_registration WHERE registration_date='${TODAY}' AND cancelled_at IS NULL`))
+
+  check('취소 시험용 등록 생성', (await register(...CANCEL_TARGET)).status === 201)
+
+  // --- 막혀야 하는 경로들 ---
+  const wrongPassword = await cancel(...CANCEL_TARGET, '0000')
+  check('비밀번호가 틀리면 취소되지 않는다 (400 CANCEL_REJECTED)',
+    wrongPassword.status === 400 && wrongPassword.json?.code === 'CANCEL_REJECTED',
+    `status=${wrongPassword.status} code=${wrongPassword.json?.code}`)
+  check('비밀번호가 틀린 뒤에도 등록은 그대로 살아 있다',
+    mysql(`SELECT COUNT(*) FROM return_registration WHERE registration_date='${TODAY}'`
+      + ` AND student_name='${CANCEL_TARGET[1]}' AND cancelled_at IS NULL`) === '1')
+
+  const noSuchPerson = await cancel('9반', '존재하지않는사람', '999')
+  check('없는 등록을 취소해도 같은 코드로 답한다 (등록 여부 비노출)',
+    noSuchPerson.status === 400 && noSuchPerson.json?.code === 'CANCEL_REJECTED',
+    `status=${noSuchPerson.status} code=${noSuchPerson.json?.code}`)
+  check('없는 등록과 비밀번호 오류의 응답 문구가 완전히 같다',
+    noSuchPerson.json?.message === wrongPassword.json?.message,
+    `없음="${noSuchPerson.json?.message}" / 틀림="${wrongPassword.json?.message}"`)
+
+  const badFormat = await cancel(...CANCEL_TARGET, '12')
+  check('비밀번호 형식이 틀리면 VALIDATION_FAILED (대입 시도로 세지 않는다)',
+    badFormat.status === 400 && badFormat.json?.code === 'VALIDATION_FAILED',
+    `status=${badFormat.status} code=${badFormat.json?.code}`)
+
+  // --- 통과해야 하는 경로 ---
+  const cancelled = await cancel(...CANCEL_TARGET)
+  check('네 값이 모두 맞으면 취소된다 (200)', cancelled.status === 200, `status=${cancelled.status}`)
+  check('취소 응답에 이름·호수를 되돌려주지 않는다',
+    cancelled.json?.studentName === undefined && cancelled.json?.roomNumber === undefined,
+    JSON.stringify(cancelled.json))
+
+  // 소프트 삭제 — 행은 남고 cancelled_at 만 채워진다.
+  check('행을 지우지 않고 cancelled_at 만 채운다 (소프트 삭제)',
+    mysql(`SELECT COUNT(*) FROM return_registration WHERE registration_date='${TODAY}'`
+      + ` AND student_name='${CANCEL_TARGET[1]}' AND cancelled_at IS NOT NULL`) === '1')
+  check('취소분은 명단 인원 수에서 빠진다',
+    Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE registration_date='${TODAY}'`
+      + ' AND cancelled_at IS NULL')) === beforeCancelCount,
+    `취소 전 ${beforeCancelCount}명`)
+
+  const cancelAgain = await cancel(...CANCEL_TARGET)
+  check('이미 취소된 등록을 다시 취소해도 200 + alreadyCancelled=true (멱등)',
+    cancelAgain.status === 200 && cancelAgain.json?.alreadyCancelled === true,
+    `status=${cancelAgain.status} alreadyCancelled=${cancelAgain.json?.alreadyCancelled}`)
+
+  // --- 되살리기: 취소한 사람이 다시 등록할 수 있어야 한다 ---
+  //     유니크 제약 (일자,반,이름,호수) 이 취소된 행에도 걸려 있어, 되살리기가 없으면
+  //     "이미 등록됨"으로 막혀 영영 재등록을 못 한다.
+  const reRegister = await register(...CANCEL_TARGET, { cancelPassword: '1357' })
+  check('취소한 사람이 다시 등록하면 201 (되살리기)', reRegister.status === 201, `status=${reRegister.status}`)
+  check('되살아난 등록은 다시 명단에 잡힌다',
+    mysql(`SELECT COUNT(*) FROM return_registration WHERE registration_date='${TODAY}'`
+      + ` AND student_name='${CANCEL_TARGET[1]}' AND cancelled_at IS NULL`) === '1')
+  check('행이 새로 생기지 않고 기존 행이 되살아난다 (유니크 제약 유지)',
+    mysql(`SELECT COUNT(*) FROM return_registration WHERE registration_date='${TODAY}'`
+      + ` AND student_name='${CANCEL_TARGET[1]}'`) === '1')
+
+  const oldPassword = await cancel(...CANCEL_TARGET, CANCEL_PASSWORD)
+  check('되살릴 때 비밀번호가 교체되어 예전 비밀번호로는 취소되지 않는다',
+    oldPassword.status === 400, `status=${oldPassword.status}`)
+  check('새 비밀번호로는 취소된다', (await cancel(...CANCEL_TARGET, '1357')).status === 200)
+
+  // --- 대사가 취소분을 되살리지 않는가 (가장 조용히 깨지는 지점) ---
+  //     취소는 소프트 삭제라 DB 행이 남지만 Redis WAL 항목도 그대로 남아 있다.
+  //     둘을 그냥 비교하면 "WAL 에만 있다"고 오판해 취소한 등록을 명단에 다시 올린다.
+  const walStillHasTarget = redis('HLEN', `imlate:wal:${TODAY}`)
+  info(`대사 직전 WAL 항목 수 = ${walStillHasTarget} (취소한 사람의 WAL 기록도 아직 남아 있다)`)
+  await admin(`/admin/reconciliation?date=${TODAY}`, 'POST').catch(() => null)
+  const afterReconcile = await adminReconciliation(TODAY)
+  check('대사 후에도 취소한 등록이 되살아나지 않는다',
+    mysql(`SELECT COUNT(*) FROM return_registration WHERE registration_date='${TODAY}'`
+      + ` AND student_name='${CANCEL_TARGET[1]}' AND cancelled_at IS NOT NULL`) === '1',
+    JSON.stringify(afterReconcile))
+  check('취소분을 뺀 DB/WAL 수가 서로 맞는다 (가짜 불일치가 생기지 않는다)',
+    afterReconcile?.dbCount === afterReconcile?.walCount,
+    `db=${afterReconcile?.dbCount} wal=${afterReconcile?.walCount} status=${afterReconcile?.status}`)
+
+  // 뒷정리 — 실패 횟수만 지우고 **등록 행은 취소 상태 그대로 남긴다.**
+  //
+  // 여기서 DELETE 를 하면 안 된다. WAL 에는 이 사람의 기록이 그대로 남아 있으므로,
+  // DB 행만 지우면 뒤이어 실행되는 대사가 "WAL 에만 있다"고 보고 되살려 버린다.
+  // (실제로 처음엔 DELETE 를 했다가 15절의 행 수 단언이 +2 로 어긋나 발견했다 —
+  //  이 기능이 막으려는 그 시나리오를 테스트가 스스로 만들어 낸 셈이다.)
+  //
+  // 취소된 행은 명단·통계에서 이미 제외되므로 남겨 두어도 이후 절의 계산을 흐리지 않는다.
+  redisDelPattern(`imlate:cancel:fail:${TODAY}:*`)
 
   // ---------------------------------------------------------------- 14 (선택)
   if (RUN_DRILLS) {

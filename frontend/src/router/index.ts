@@ -17,6 +17,12 @@ const router = createRouter({
       meta: { title: '야간 복귀 등록' },
     },
     {
+      path: '/cancel',
+      name: 'cancel',
+      component: () => import('../views/CancelView.vue'),
+      meta: { title: '야간 복귀 등록 취소' },
+    },
+    {
       path: '/lookup',
       name: 'lookup',
       component: () => import('../views/LookupView.vue'),

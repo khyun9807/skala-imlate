@@ -48,6 +48,17 @@ public class RegistrationBodyCachingFilter extends OncePerRequestFilter {
 
     private static final String METHOD_POST = "POST";
     private static final String PATH_REGISTRATIONS = "/api/v1/registrations";
+
+    /**
+     * 취소 경로. 등록과 동일하게 본문에서 개인 키를 뽑아야 한다.
+     *
+     * <p><b>여기를 빠뜨리면 조용히 구멍이 난다</b> — {@code RateLimitInterceptor} 는
+     * {@code startsWith("/api/v1/registrations")} 로 스코프를 고르므로 취소도 REGISTER 스코프에 들어가지만,
+     * 본문이 캐싱되지 않으면 {@code PersonKeyResolver} 가 null 을 돌려줘 <u>개인 축 검사만 건너뛴다</u>.
+     * 그러면 공용 와이파이 뒤에서 비밀번호를 마구 두드려도 IP 축 한도까지 통과한다.
+     */
+    private static final String PATH_REGISTRATIONS_CANCEL = "/api/v1/registrations/cancel";
+
     private static final String CONTENT_TYPE_JSON = "application/json";
 
     private final RateLimitProperties properties;
@@ -84,7 +95,7 @@ public class RegistrationBodyCachingFilter extends OncePerRequestFilter {
             return false;
         }
         String uri = request.getRequestURI();
-        if (uri == null || !uri.endsWith(PATH_REGISTRATIONS)) {
+        if (uri == null || !(uri.endsWith(PATH_REGISTRATIONS) || uri.endsWith(PATH_REGISTRATIONS_CANCEL))) {
             return false;
         }
         String contentType = request.getContentType();

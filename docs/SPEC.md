@@ -443,15 +443,32 @@ DB에만 있는 항목이 남으면 → `MISMATCH`(WAL TTL 만료 가능성이�
 
 `POST /api/v1/registrations`
 ```json
-요청 { "className":"1반", "studentName":"홍길동", "roomNumber":"302" }
+요청 { "className":"1반", "studentName":"홍길동", "roomNumber":"302", "cancelPassword":"1234" }
 201  { "id":12, "registrationDate":"2026-08-05", "className":"1반", "studentName":"홍길동",
        "roomNumber":"302", "registeredAt":"2026-08-05T21:03:11", "duplicate":false,
        "returnTime":"23:30" }
 ```
 - 중복 등록이면 **200 OK + `"duplicate": true`** (기존 레코드 반환, 새로 만들지 않음)
+- **취소했던 사람이 다시 등록하면 201** — 새 행을 만들지 않고 기존 행을 되살린다(§5.7).
 - 마감 후 → 409 `REGISTRATION_CLOSED`
 - 검증: 각 필드 `@NotBlank`, className ≤ 20자, studentName ≤ 20자, roomNumber ≤ 20자,
   제어문자 금지 정규식 `^[가-힣A-Za-z0-9 ()\\-]{1,20}$`
+- `cancelPassword` 는 **숫자 4자리 필수**(`^[0-9]{4}$`). 해시해서 저장하고 평문은 DB·로그·WAL 어디에도 남기지 않는다.
+
+`POST /api/v1/registrations/cancel`
+```json
+요청 { "className":"1반", "studentName":"홍길동", "roomNumber":"302", "password":"1234" }
+200  { "date":"2026-08-05", "cancelledAt":"2026-08-05T20:15:00",
+       "alreadyCancelled":false, "message":"취소되었습니다. 오늘 밤 명단에서 빠졌습니다." }
+```
+- 네 값이 **모두** 맞아야 취소된다. 응답에 반·이름·호수를 되돌려주지 않는다.
+- 이미 취소된 등록에 같은 비밀번호로 다시 요청 → 200 + `alreadyCancelled=true` (멱등, 최초 취소 시각 보존)
+- 등록 없음 / 비밀번호 불일치 / 비밀번호 없는 행 → **모두 400 `CANCEL_REJECTED` + 동일 문구**.
+  구분해 주면 응답 차이로 "오늘 누가 등록했는지"가 새어 나간다.
+- 시도 상한 초과 → 429 `CANCEL_LOCKED`
+- 마감 후 → 409 `REGISTRATION_CLOSED` (명단은 이미 사감에게 나갔다)
+- `DELETE` 가 아니라 `POST` 인 이유: 비밀번호를 본문에 실어야 하는데 `DELETE` 본문은 명세상
+  의미가 정의되어 있지 않아 버려질 수 있고, 쿼리로 옮기면 접근 로그·브라우저 히스토리에 평문으로 남는다.
 
 `GET /api/v1/registrations/window` → `RegistrationWindow` JSON (프론트가 서버시간 기준으로 카운트다운)
 
@@ -473,6 +490,31 @@ DB에만 있는 항목이 남으면 → `MISMATCH`(WAL TTL 만료 가능성이�
 - `date` 파라미터 생략 시 오늘. `token` 필수 (`AccessTokenService.requireValid`).
 - 이 응답 조립은 `LookupController`(registration 담당)가 `ReconciliationService` +
   `RegistrationService` + `StatsQueryService`(stats 담당, 5.6 인터페이스) 를 사용.
+
+### 5.7 등록 취소 (운영 요청, V2)
+
+> "등록된 것을 취소하는 것도 가능하게. 남이 다른 사람의 등록을 취소할 수 있으니 등록할 때
+> 비밀번호 숫자 4자리도 받아서 보관하고, 취소할 때 반·이름·호수 + 그 비밀번호가 모두 맞았을 때만 취소되게."
+
+**설계 기준** — 취소는 남의 등록을 지울 수 있는 유일한 경로다. 명단에서 빠진 교육생은 22:30 에 문이
+잠기면 밖에서 밤을 샌다. 따라서 **"잘못 취소되는 것"이 "취소가 안 되는 것"보다 훨씬 나쁜 실패**이며,
+모든 판단을 그 비대칭에 맞춘다.
+
+| 결정 | 내용 | 근거 |
+|---|---|---|
+| 소프트 삭제 | `cancelled_at` 만 채우고 행은 남긴다 | 행을 지우면 WAL 기록이 남아 **21:50 대사가 취소분을 되살린다** |
+| 대사에서 제외 | 취소한 사람을 DB·WAL **양쪽에서** 뺀다 | 한쪽만 빼면 되살아나거나 가짜 불일치가 뜬다 |
+| 되살리기 | 취소 후 재등록은 INSERT 가 아니라 기존 행 복구 | 유니크 제약이 취소된 행에도 걸려 있어 새 행을 못 만든다 |
+| 비밀번호 저장 | PBKDF2 + **서버 시크릿 pepper** | 4자리는 1만 가지뿐 — 해시만으로는 DB 유출 시 즉시 뚫린다 |
+| pepper 유도 | `HMAC-SHA256(lookup.token-secret, "imlate:cancel-pin:pepper:v1")` | 새 시크릿을 만들면 SSM 파라미터가 늘어 `terraform apply` 가 필요해진다 |
+| 시도 총량 제한 | 사람·날짜당 10회 (`CancelAttemptGuard`) | 속도 제한(분당 N회)만으론 하루 종일 두드리면 1만 가지가 다 뚫린다 |
+| Redis 장애 시 | **취소를 거부**(fail-closed) | 등록 실패는 "문 밖에 갇힘"(치명), 취소 실패는 "명단에 남음"(무해) — 방향이 반대다 |
+| 실패 응답 | 사유를 구분하지 않는 단일 문구 | 구분하면 응답 차이로 등록 여부가 노출된다 |
+| 해시 반복 | 20,000회 (설정 가능) | t3.small 2 vCPU. 10만 회는 1건당 150~200ms 라 마감 직전 몰림에서 타임아웃 위험 |
+
+**부작용(의도한 것)** — 남의 등록에 일부러 10번 틀리면 그 사람이 그날 취소하지 못한다.
+그 경우 피해자는 *명단에 남을* 뿐이다. 상한을 두지 않으면 남의 등록을 지워 *실제로 밖에 갇히게* 만들 수 있다.
+가벼운 쪽을 택했다.
 
 ### 5.6 다른 모듈에 노출/의존하는 인터페이스
 
@@ -854,7 +896,13 @@ imlate:
 
 ---
 
-## 9. DB 스키마 (Flyway `V1__init.sql`) — foundation 담당
+## 9. DB 스키마 (Flyway) — foundation 담당
+
+마이그레이션은 **앱 기동 때 자동 적용**된다(`flyway.enabled: true`, `baseline-on-migrate: true`).
+배포 스크립트는 스키마를 건드리지 않으므로, 컬럼 추가는 코드 배포만으로 반영된다.
+
+> **주의** — `ddl-auto: validate` 이므로 엔티티와 스키마가 어긋나면 **앱이 아예 뜨지 않는다.**
+> 마이그레이션과 엔티티 변경은 반드시 **같은 jar 에 함께** 실려야 한다.
 
 ```sql
 CREATE TABLE return_registration (
@@ -877,6 +925,24 @@ CREATE TABLE daily_stat ( stat_date DATE NOT NULL PRIMARY KEY, page_views BIGINT
   unique_visitors BIGINT NOT NULL DEFAULT 0, registrations BIGINT NOT NULL DEFAULT 0,
   updated_at DATETIME(6) NOT NULL ) …;
 ```
+
+`V2__add_cancel.sql` — 등록 취소(§5.7)
+
+```sql
+ALTER TABLE return_registration
+  ADD COLUMN cancel_password_hash VARCHAR(200) NULL,   -- pbkdf2-sha256$반복$salt$hash
+  ADD COLUMN cancelled_at         DATETIME(6)  NULL;   -- NULL 이면 유효한 등록
+CREATE INDEX idx_return_registration_date_active
+  ON return_registration (registration_date, cancelled_at);
+```
+
+- **두 컬럼 모두 NULL 허용이다.** 이 마이그레이션은 운영 중인 DB 위에서 실행되므로,
+  `NOT NULL` 로 두면 기존 행 때문에 마이그레이션이 통째로 실패하고 앱이 뜨지 못한다.
+  "비밀번호 필수"는 API 검증에서 강제하고 스키마는 관대하게 둔다.
+- 비밀번호 해시가 없는 행(V2 이전 등록 · WAL 복구분)은 **취소할 수 없다.**
+  명단에 남아 잠기지 않는 쪽이 명단에서 사라지는 것보다 안전하다.
+- 명단·통계 조회는 전부 `cancelled_at IS NULL` 로 걸러야 한다.
+  단, **대사(§5.4)는 취소분까지 읽어야 한다** — 취소된 행이 "DB 에 있다"로 보여야 WAL 로 되살리지 않는다.
 
 ---
 

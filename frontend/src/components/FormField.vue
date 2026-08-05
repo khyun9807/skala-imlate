@@ -23,6 +23,13 @@ interface Props {
   enterkeyhint?: 'enter' | 'done' | 'go' | 'next' | 'search' | 'send'
   disabled?: boolean
   required?: boolean
+  /**
+   * input 의 type. 취소 비밀번호처럼 가려야 하는 값에 `password` 를 쓴다.
+   *
+   * 기숙사 로비·엘리베이터처럼 사람이 붙어 있는 곳에서 입력하는 화면이라 어깨너머로 보인다.
+   * 비밀번호가 노출되면 그 사람의 등록을 남이 취소할 수 있으므로 기본적으로 가린다.
+   */
+  type?: 'text' | 'password'
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -36,6 +43,7 @@ const props = withDefaults(defineProps<Props>(), {
   enterkeyhint: 'next',
   disabled: false,
   required: true,
+  type: 'text',
 })
 
 const emit = defineEmits<{
@@ -86,7 +94,7 @@ defineExpose({ focus })
       ref="inputRef"
       class="field__input"
       :class="{ 'field__input--error': !!error }"
-      type="text"
+      :type="type"
       :value="modelValue"
       :list="hasSuggestions ? listId : undefined"
       :placeholder="placeholder"

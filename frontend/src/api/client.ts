@@ -7,6 +7,8 @@
  */
 
 import type {
+  CancelRequest,
+  CancelResponse,
   LookupResponse,
   RegistrationRequest,
   RegistrationResponse,
@@ -31,6 +33,10 @@ const FALLBACK_MESSAGES: Record<string, string | undefined> = {
   // 마감 시각은 설정값이라 프론트에서 단정하지 않는다. 정확한 시각은 화면 상단 등록 시간 안내가 보여 준다.
   REGISTRATION_CLOSED: '오늘 밤 복귀 등록은 마감되었습니다. 화면 위쪽의 등록 시간 안내를 확인해 주세요.',
   REGISTRATION_NOT_OPEN: '아직 등록 가능한 시간이 아닙니다.',
+  // 등록이 없는 경우와 비밀번호가 틀린 경우를 서버가 일부러 구분하지 않는다(등록 여부 노출 방지).
+  // 프론트도 그 구분을 지어내지 않는다.
+  CANCEL_REJECTED: '등록 정보 또는 비밀번호가 일치하지 않습니다.',
+  CANCEL_LOCKED: '취소 시도 횟수를 초과했습니다. 오늘은 더 시도할 수 없습니다.',
   UNAUTHORIZED: '인증 정보가 필요합니다.',
   FORBIDDEN: '조회 권한이 없습니다. 링크가 만료되었을 수 있습니다.',
   NOT_FOUND: '요청하신 정보를 찾을 수 없습니다.',
@@ -156,6 +162,16 @@ export function fetchRegistrationWindow(): Promise<RegistrationWindow> {
 /** 복귀 등록 */
 export function createRegistration(payload: RegistrationRequest): Promise<RegistrationResponse> {
   return request<RegistrationResponse>('/registrations', { method: 'POST', body: payload })
+}
+
+/**
+ * 복귀 등록 취소.
+ *
+ * 비밀번호가 본문에 실리므로 쿼리스트링이 아닌 POST 본문을 쓴다
+ * (쿼리로 보내면 접근 로그·브라우저 히스토리에 평문으로 남는다).
+ */
+export function cancelRegistration(payload: CancelRequest): Promise<CancelResponse> {
+  return request<CancelResponse>('/registrations/cancel', { method: 'POST', body: payload })
 }
 
 /** 사감용 조회 페이지 데이터 */

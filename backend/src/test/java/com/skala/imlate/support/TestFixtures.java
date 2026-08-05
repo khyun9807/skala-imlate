@@ -12,6 +12,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import com.skala.imlate.common.properties.ImlateProperties;
 import com.skala.imlate.registration.domain.ReturnRegistration;
+import com.skala.imlate.registration.service.CancelPasswordHasher;
 import com.skala.imlate.registration.service.ReconciliationReport;
 import com.skala.imlate.registration.wal.WalEntry;
 import com.skala.imlate.registration.wal.WalStatus;
@@ -41,6 +42,22 @@ public final class TestFixtures {
 
     /** 원래 통금 시각(22:30). */
     public static final LocalTime CURFEW_TIME = LocalTime.of(22, 30);
+
+    /** 테스트용 취소 비밀번호(숫자 4자리). */
+    public static final String CANCEL_PASSWORD = "1234";
+
+    /** 실제 구현으로 만든 해시기. 상태가 없어 공유해도 안전하다. */
+    private static final CancelPasswordHasher CANCEL_PASSWORD_HASHER =
+            new CancelPasswordHasher(imlateProperties());
+
+    /**
+     * {@link #CANCEL_PASSWORD} 의 해시. <b>클래스 로딩 때 한 번만</b> 계산한다.
+     *
+     * <p>PBKDF2 는 일부러 느리게 만든 함수라 1회에 수십 ms 가 든다. 픽스처를 만들 때마다 새로 계산하면
+     * 등록 엔티티를 수백 개 찍는 테스트에서 그것만으로 수십 초가 사라진다.
+     * salt 가 고정되는 셈이지만 테스트 데이터이므로 문제되지 않는다.
+     */
+    private static final String CANCEL_PASSWORD_HASH = CANCEL_PASSWORD_HASHER.hash(CANCEL_PASSWORD);
 
     private TestFixtures() {
         // 유틸리티 클래스
@@ -87,11 +104,37 @@ public final class TestFixtures {
                                                   String studentName, String roomNumber) {
         ReturnRegistration entity = ReturnRegistration.create(date, className, studentName, roomNumber,
                 "wal-" + (id == null ? "new" : id),
-                date.atTime(21, 3, 11), date.atTime(21, 3, 12));
+                date.atTime(21, 3, 11), date.atTime(21, 3, 12),
+                CANCEL_PASSWORD_HASH);
         if (id != null) {
             ReflectionTestUtils.setField(entity, "id", id);
         }
         return entity;
+    }
+
+    /**
+     * 취소된 등록 엔티티.
+     *
+     * <p>대사가 취소분을 되살리지 않는지, 재등록이 되살리기로 처리되는지 확인할 때 쓴다.
+     */
+    public static ReturnRegistration cancelledRegistration(Long id, String className,
+                                                           String studentName, String roomNumber) {
+        ReturnRegistration entity = registration(id, className, studentName, roomNumber);
+        entity.cancel(DATE.atTime(20, 0, 0));
+        return entity;
+    }
+
+    /**
+     * 테스트용 취소 비밀번호 해시기.
+     *
+     * <p>실제 구현을 그대로 쓴다 — 해시·검증은 등록과 취소가 반드시 같은 방식이어야 하고,
+     * 가짜로 바꿔치면 그 대칭이 깨져도 테스트가 통과해 버린다.
+     *
+     * <p>인스턴스를 하나만 만들어 재사용한다. 생성 자체는 싸지만, 아래 {@link #CANCEL_PASSWORD_HASH}
+     * 를 한 번만 계산하기 위한 근거지이기도 하다.
+     */
+    public static CancelPasswordHasher cancelPasswordHasher() {
+        return CANCEL_PASSWORD_HASHER;
     }
 
     /** {@link #DATE} 기준 등록 엔티티. */

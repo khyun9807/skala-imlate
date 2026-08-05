@@ -5,18 +5,19 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 /**
- * 등록 요청 본문(SPEC §5.5).
+ * 등록 취소 요청 본문.
  *
- * <p>제어문자·특수문자를 막기 위해 한글·영문·숫자와 공백, 괄호, 하이픈만 허용한다.
- * 정규식은 {@code ^[가-힣A-Za-z0-9 ()\-]{1,20}$} 이며, 서비스에서 정규화(trim + 연속 공백 축약) 후
- * 같은 문자 집합으로 한 번 더 검증한다.
+ * <p>필드 이름을 {@link RegistrationRequest} 와 똑같이 맞춘 것은 의도한 것이다.
+ * 개인 축 rate limit 키를 만드는 {@code PersonKeyResolver} 가 본문에서
+ * {@code className / studentName / roomNumber} 를 읽으므로, 이름이 같아야 취소 요청도
+ * 등록과 동일한 개인 버킷에 들어가 도배가 막힌다.
  *
- * @param className      반 (예: "1반")
- * @param studentName    이름 (예: "홍길동")
- * @param roomNumber     기숙사 호수 (예: "302")
- * @param cancelPassword 나중에 취소할 때 쓸 비밀번호(숫자 4자리)
+ * @param className   반
+ * @param studentName 이름
+ * @param roomNumber  기숙사 호수
+ * @param password    등록할 때 정한 취소 비밀번호(숫자 4자리)
  */
-public record RegistrationRequest(
+public record CancelRequest(
 
         @NotBlank(message = "반을 입력해 주세요.")
         @Size(max = 20, message = "반은 20자 이내로 입력해 주세요.")
@@ -36,16 +37,8 @@ public record RegistrationRequest(
                 message = "기숙사 호수에는 한글·영문·숫자와 공백, 괄호, 하이픈만 사용할 수 있습니다.")
         String roomNumber,
 
-        /*
-         * 취소 비밀번호. 나중에 본인이 등록을 취소할 때 쓴다.
-         *
-         * 자릿수(4)를 여기에 상수로 박은 이유 — 애너테이션 값은 컴파일 타임 상수여야 해서
-         * 설정값(imlate.registration.cancel.password-length)을 참조할 수 없다.
-         * 설정으로 자릿수를 바꾸면 서비스 검증(RegistrationService.validatePassword)이 실제 기준이 되고,
-         * 여기 400 은 그 앞단의 빠른 거절일 뿐이라 동작은 어긋나지 않는다.
-         */
         @NotBlank(message = "비밀번호를 입력해 주세요.")
         @Pattern(regexp = "^[0-9]{4}$", message = "비밀번호는 숫자 4자리로 입력해 주세요.")
-        String cancelPassword
+        String password
 ) {
 }

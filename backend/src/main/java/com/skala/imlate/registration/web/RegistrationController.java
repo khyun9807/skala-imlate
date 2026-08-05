@@ -11,11 +11,15 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.skala.imlate.common.web.ClientIpResolver;
+import com.skala.imlate.registration.service.CancelCommand;
+import com.skala.imlate.registration.service.CancelResult;
 import com.skala.imlate.registration.service.RegistrationCommand;
 import com.skala.imlate.registration.service.RegistrationResult;
 import com.skala.imlate.registration.service.RegistrationService;
 import com.skala.imlate.registration.service.RegistrationWindow;
 import com.skala.imlate.registration.service.RegistrationWindowPolicy;
+import com.skala.imlate.registration.web.dto.CancelRequest;
+import com.skala.imlate.registration.web.dto.CancelResponse;
 import com.skala.imlate.registration.web.dto.RegistrationRequest;
 import com.skala.imlate.registration.web.dto.RegistrationResponse;
 import com.skala.imlate.registration.web.dto.RegistrationSummaryResponse;
@@ -56,13 +60,40 @@ public class RegistrationController {
                                                           HttpServletRequest httpRequest) {
         String clientIp = ClientIpResolver.resolve(httpRequest);
         RegistrationResult result = registrationService.register(new RegistrationCommand(
-                request.className(), request.studentName(), request.roomNumber(), clientIp));
+                request.className(), request.studentName(), request.roomNumber(),
+                request.cancelPassword(), clientIp));
 
         RegistrationResponse body = RegistrationResponse.of(
                 result.registration(), result.duplicate(), windowPolicy.returnTime());
         HttpStatus status = result.duplicate() ? HttpStatus.OK : HttpStatus.CREATED;
         log.debug("Registration response status={} duplicate={}", status.value(), result.duplicate());
         return ResponseEntity.status(status).body(body);
+    }
+
+    /**
+     * 등록 취소. 반·이름·호수로 등록을 찾고 등록할 때 정한 비밀번호로 본인임을 확인한다.
+     *
+     * <p><b>왜 {@code DELETE} 가 아니라 {@code POST} 인가</b> — 취소에는 비밀번호가 필요한데,
+     * {@code DELETE} 의 본문은 명세상 의미가 정의되어 있지 않아 프록시·클라이언트가 버릴 수 있다.
+     * 비밀번호를 URL 쿼리로 옮기면 접근 로그·브라우저 히스토리에 평문으로 남는다.
+     * 그래서 본문을 확실히 실어 보낼 수 있는 {@code POST} 를 쓴다.
+     *
+     * <p>경로가 {@code /api/v1/registrations} 로 시작하므로 등록과 같은 rate limit 스코프를 탄다
+     * (IP 축 + 개인 축). 비밀번호 대입은 그와 별개로 {@code CancelAttemptGuard} 가 총량으로 막는다.
+     *
+     * @param request     취소 요청 본문
+     * @param httpRequest 클라이언트 IP 추출용
+     * @return 취소 결과(항상 200. 실패는 예외 → 에러 응답)
+     */
+    @PostMapping("/cancel")
+    public CancelResponse cancel(@Valid @RequestBody CancelRequest request,
+                                 HttpServletRequest httpRequest) {
+        String clientIp = ClientIpResolver.resolve(httpRequest);
+        CancelResult result = registrationService.cancel(new CancelCommand(
+                request.className(), request.studentName(), request.roomNumber(),
+                request.password(), clientIp));
+        log.debug("Cancel response alreadyCancelled={}", result.alreadyCancelled());
+        return CancelResponse.of(result);
     }
 
     /**

@@ -31,6 +31,8 @@ import com.skala.imlate.common.error.ApiException;
 import com.skala.imlate.common.error.ErrorCode;
 import com.skala.imlate.common.error.GlobalExceptionHandler;
 import com.skala.imlate.registration.domain.ReturnRegistration;
+import com.skala.imlate.registration.service.CancelCommand;
+import com.skala.imlate.registration.service.CancelResult;
 import com.skala.imlate.registration.service.RegistrationCommand;
 import com.skala.imlate.registration.service.RegistrationResult;
 import com.skala.imlate.registration.service.RegistrationService;
@@ -75,9 +77,21 @@ class RegistrationControllerTest {
     }
 
     private static String body(String className, String studentName, String roomNumber) {
+        return body(className, studentName, roomNumber, TestFixtures.CANCEL_PASSWORD);
+    }
+
+    /** 취소 비밀번호까지 지정하는 본문(비밀번호 검증을 따로 볼 때 쓴다). */
+    private static String body(String className, String studentName, String roomNumber, String cancelPassword) {
         return """
-                {"className":"%s","studentName":"%s","roomNumber":"%s"}"""
-                .formatted(className, studentName, roomNumber);
+                {"className":"%s","studentName":"%s","roomNumber":"%s","cancelPassword":"%s"}"""
+                .formatted(className, studentName, roomNumber, cancelPassword);
+    }
+
+    /** 취소 요청 본문. 등록과 필드 이름이 같고 비밀번호 필드만 {@code password} 다. */
+    private static String cancelBody(String className, String studentName, String roomNumber, String password) {
+        return """
+                {"className":"%s","studentName":"%s","roomNumber":"%s","password":"%s"}"""
+                .formatted(className, studentName, roomNumber, password);
     }
 
     @Test
@@ -169,6 +183,80 @@ class RegistrationControllerTest {
                         .content(body("1반", "가".repeat(21), "302")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    }
+
+    @Test
+    @DisplayName("취소 비밀번호가 4자리 숫자가 아니면 400 BAD_REQUEST 로 거부한다")
+    void 잘못된_비밀번호_형식은_400() throws Exception {
+        for (String bad : new String[] {"", "123", "12345", "abcd", "12 4"}) {
+            mockMvc.perform(post(PATH)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .characterEncoding(StandardCharsets.UTF_8)
+                            .content(body("1반", "홍길동", "302", bad)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+        }
+
+        verify(registrationService, never()).register(any(RegistrationCommand.class));
+    }
+
+    @Test
+    @DisplayName("POST /cancel 은 취소 결과를 200 으로 반환한다")
+    void 취소는_200() throws Exception {
+        when(registrationService.cancel(any(CancelCommand.class)))
+                .thenReturn(new CancelResult(TestFixtures.DATE, TestFixtures.DATE.atTime(20, 15), false));
+
+        mockMvc.perform(post(PATH + "/cancel")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .characterEncoding(StandardCharsets.UTF_8)
+                        .content(cancelBody("1반", "홍길동", "302", "1234")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.alreadyCancelled").value(false))
+                .andExpect(jsonPath("$.message").exists())
+                // 응답에 반·이름·호수를 되돌려주지 않는다(어깨너머 노출을 줄인다).
+                .andExpect(jsonPath("$.studentName").doesNotExist())
+                .andExpect(jsonPath("$.roomNumber").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("취소 실패는 400 + CANCEL_REJECTED 로 응답하고 사유를 구분해 알려주지 않는다")
+    void 취소_실패는_400_CANCEL_REJECTED() throws Exception {
+        when(registrationService.cancel(any(CancelCommand.class)))
+                .thenThrow(ApiException.of(ErrorCode.CANCEL_REJECTED, "등록 정보 또는 비밀번호가 일치하지 않습니다."));
+
+        mockMvc.perform(post(PATH + "/cancel")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .characterEncoding(StandardCharsets.UTF_8)
+                        .content(cancelBody("1반", "홍길동", "302", "9999")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("CANCEL_REJECTED"));
+    }
+
+    @Test
+    @DisplayName("취소 시도 초과는 429 + CANCEL_LOCKED 로 응답한다")
+    void 취소_시도_초과는_429() throws Exception {
+        when(registrationService.cancel(any(CancelCommand.class)))
+                .thenThrow(ApiException.of(ErrorCode.CANCEL_LOCKED, "오늘은 더 시도할 수 없습니다."));
+
+        mockMvc.perform(post(PATH + "/cancel")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .characterEncoding(StandardCharsets.UTF_8)
+                        .content(cancelBody("1반", "홍길동", "302", "9999")))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("CANCEL_LOCKED"));
+    }
+
+    @Test
+    @DisplayName("취소 요청도 비밀번호 형식을 검증한다(서비스까지 가지 않는다)")
+    void 취소_비밀번호_형식_검증() throws Exception {
+        mockMvc.perform(post(PATH + "/cancel")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .characterEncoding(StandardCharsets.UTF_8)
+                        .content(cancelBody("1반", "홍길동", "302", "12")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+
+        verify(registrationService, never()).cancel(any(CancelCommand.class));
     }
 
     @Test

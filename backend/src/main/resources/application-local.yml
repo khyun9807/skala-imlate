@@ -44,6 +44,16 @@ management:
   endpoint:
     health:
       show-details: always
+    # 통합 시험(scripts/integration-test.mjs)이 "기동 중인 앱의 실제 설정값"을 읽어
+    # 마감 시각·rate limit 한도·문의처 문구를 검증한다. 스프링 부트는 기본적으로 이 값들을
+    # `******` 로 가리므로, 가린 채로 두면 그 검증들이 <b>영원히 실패</b>한다.
+    # (한도를 스크립트에 하드코딩하면 설정을 고쳐도 테스트가 같이 거짓말을 하므로 그렇게 하지 않는다)
+    #
+    # **local 프로파일 전용이다.** application-prod.yml 은 env 엔드포인트 자체를 노출하지 않는다.
+    env:
+      show-values: ALWAYS
+    configprops:
+      show-values: ALWAYS
 
 logging:
   level:

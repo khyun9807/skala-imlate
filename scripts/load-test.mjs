@@ -325,16 +325,26 @@ async function envNumber(...names) {
   return null
 }
 
+/**
+ * 부하 시험용 취소 비밀번호.
+ *
+ * 등록마다 서버가 PBKDF2 를 한 번 계산한다(의도적으로 느린 함수). 이 시험이 재는 것은
+ * 그 비용까지 포함한 <b>실제 등록 처리량</b>이므로, 값을 고정하되 해시를 건너뛰지는 않는다.
+ */
+const LOAD_CANCEL_PASSWORD = '1111'
+
 const registerBody = (i) => ({
   className: CLASSES[i % CLASSES.length],
   studentName: `부하생${String(i + 1).padStart(4, '0')}`,
   roomNumber: ROOM_LOAD(i),
+  cancelPassword: LOAD_CANCEL_PASSWORD,
 })
 
 const wifiBody = (i) => ({
   className: CLASSES[i % CLASSES.length],
   studentName: `와이파이생${String(i + 1).padStart(4, '0')}`,
   roomNumber: ROOM_WIFI(i),
+  cancelPassword: LOAD_CANCEL_PASSWORD,
 })
 
 // ── 인프라 헬퍼 (integration-test.mjs 와 동일한 방식) ─────────────────────────
@@ -547,7 +557,7 @@ async function preflight() {
   //   (다른 스택이 8080 을 점유한 경우를 여기서 잡아낸다)
   const canary = await call('POST', '/registrations', {
     ip: CONTROL_IP,
-    body: { className: '점검반', studentName: '사전점검', roomNumber: ROOM_CANARY },
+    body: { className: '점검반', studentName: '사전점검', roomNumber: ROOM_CANARY, cancelPassword: LOAD_CANCEL_PASSWORD },
   })
   check('카나리아 등록 201', canary.status === 201, `status=${canary.status} ${canary.text.slice(0, 120)}`)
   check(`앱이 --mysql(${MYSQL_CONTAINER}) 컨테이너의 DB 를 사용 중`,
@@ -782,7 +792,7 @@ async function phaseRace(date) {
   info('여기서 확인할 것은 "통과한 요청들 사이에서 중복 행이 생기지 않는가" 이다.')
   clearRateLimits()
 
-  const person = { className: '9반', studentName: '동시등록', roomNumber: ROOM_RACE }
+  const person = { className: '9반', studentName: '동시등록', roomNumber: ROOM_RACE, cancelPassword: LOAD_CANCEL_PASSWORD }
   const m = newMetrics(`동일인 동시 등록 ${RACE_REQUESTS}건`)
 
   // 진짜 "동시"를 만들기 위해 풀을 쓰지 않고 한꺼번에 발사한다.
@@ -831,7 +841,7 @@ async function phasePersonSpam(date) {
   info('IP 는 같지만 이쪽은 반드시 429 가 나야 한다. 이것이 "둘 다 적용"의 존재 이유다.')
   clearRateLimits()
 
-  const person = { className: '9반', studentName: '도배사용자', roomNumber: ROOM_SPAM }
+  const person = { className: '9반', studentName: '도배사용자', roomNumber: ROOM_SPAM, cancelPassword: LOAD_CANCEL_PASSWORD }
   const m = newMetrics(`동일인 반복 제출 (같은 IP ${SPAM_IP})`)
   const started = performance.now()
   let firstBlockedAt = 0
@@ -869,7 +879,7 @@ async function phasePersonSpam(date) {
   info('공용 와이파이에서 한 명이 도배해도 나머지 199명은 등록할 수 있어야 한다.')
   const neighbor = await call('POST', '/registrations', {
     ip: SPAM_IP, visitor: 'neighbor',
-    body: { className: '9반', studentName: '옆자리사용자', roomNumber: ROOM_NEIGHBOR },
+    body: { className: '9반', studentName: '옆자리사용자', roomNumber: ROOM_NEIGHBOR, cancelPassword: LOAD_CANCEL_PASSWORD },
   })
   check('★ 도배 차단 중에도 같은 IP 의 다른 사람은 정상 등록(201)', neighbor.status === 201,
     `status=${neighbor.status} ${neighbor.text.slice(0, 140)}`
@@ -911,7 +921,7 @@ async function phaseLineFlood(date, state) {
   // 폭주 회선에서는 등록도 막혀 있어야 한다(같은 IP 버킷을 공유한다).
   const blockedRegister = await call('POST', '/registrations', {
     ip: FLOOD_IP, visitor: 'flood-bot',
-    body: { className: '9반', studentName: '폭주회선', roomNumber: ROOM_FLOOD },
+    body: { className: '9반', studentName: '폭주회선', roomNumber: ROOM_FLOOD, cancelPassword: LOAD_CANCEL_PASSWORD },
   })
   check('폭주로 소진된 회선에서는 등록도 차단된다(429)', blockedRegister.status === 429,
     `status=${blockedRegister.status}`)
@@ -922,7 +932,7 @@ async function phaseLineFlood(date, state) {
     // IP 단위 격리: 폭주 회선을 막아도 다른 회선은 멀쩡해야 한다.
     const other = await call('POST', '/registrations', {
       ip: CLEAN_IP, visitor: 'clean-line',
-      body: { className: '9반', studentName: '다른회선사용자', roomNumber: ROOM_OTHER_LINE },
+      body: { className: '9반', studentName: '다른회선사용자', roomNumber: ROOM_OTHER_LINE, cancelPassword: LOAD_CANCEL_PASSWORD },
     })
     check('폭주 회선을 차단해도 다른 IP 는 정상 등록(201)', other.status === 201,
       `status=${other.status} ${other.text.slice(0, 120)}`)

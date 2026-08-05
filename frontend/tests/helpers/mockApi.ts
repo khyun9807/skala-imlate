@@ -80,6 +80,17 @@ export type RegisterScenario =
 export type LookupScenario = 'ok' | 'empty' | 'forbidden' | 'serverError'
 
 /**
+ * `POST /registrations/cancel` 응답 시나리오.
+ *
+ * - `cancelled`      정상 취소
+ * - `alreadyCancelled` 이미 취소된 등록에 다시 요청(멱등)
+ * - `rejected`       등록이 없거나 비밀번호가 틀림 — 서버가 <b>둘을 구분하지 않는다</b>
+ * - `locked`         시도 횟수 초과(그날은 더 시도 불가)
+ * - `closed`         마감 후 취소 시도
+ */
+export type CancelScenario = 'cancelled' | 'alreadyCancelled' | 'rejected' | 'locked' | 'closed'
+
+/**
  * 화면이 **절대 호출하면 안 되는** API 경로.
  * 검증(대사)·통계는 뒤에서 기록만 하고 사용자에게 보여 주지 않기로 했다.
  */
@@ -93,6 +104,8 @@ export interface MockOptions {
   register?: RegisterScenario
   /** 조회 응답 (기본 ok) */
   lookup?: LookupScenario
+  /** 취소 응답 (기본 cancelled) */
+  cancel?: CancelScenario
   /** 명단 데이터 종류. `long` 은 모든 값이 최대 길이(20자)인 최악 케이스 */
   roster?: 'default' | 'long'
 }
@@ -102,12 +115,24 @@ export interface RegistrationPayload {
   className: string
   studentName: string
   roomNumber: string
+  /** 취소 비밀번호(숫자 4자리). 등록 요청에만 실린다 */
+  cancelPassword?: string
+}
+
+/** 취소 요청 바디 */
+export interface CancelPayload {
+  className: string
+  studentName: string
+  roomNumber: string
+  password?: string
 }
 
 /** 설치된 목 컨트롤러 */
 export interface ApiMock {
   /** 실제로 서버까지 전달된 등록 요청 바디 목록 */
   readonly registrationRequests: RegistrationPayload[]
+  /** 실제로 서버까지 전달된 취소 요청 바디 목록 */
+  readonly cancelRequests: CancelPayload[]
   /** 목이 처리한 모든 API 경로 (`/api/v1/...`) */
   readonly handledPaths: string[]
   /** 요청마다 실린 `X-Visitor-Id` 헤더 값 (SPEC §7.1). 없으면 null */
@@ -116,6 +141,8 @@ export interface ApiMock {
   setRegisterScenario(scenario: RegisterScenario): void
   /** 테스트 도중 등록 창 시나리오를 바꾼다. */
   setWindowScenario(scenario: WindowScenario): void
+  /** 테스트 도중 취소 응답 시나리오를 바꾼다. */
+  setCancelScenario(scenario: CancelScenario): void
 }
 
 /** 조회 명단 한 줄 */
@@ -172,11 +199,13 @@ export const RETRY_AFTER_SECONDS = 30
  */
 export async function installApiMocks(page: Page, options: MockOptions = {}): Promise<ApiMock> {
   const registrationRequests: RegistrationPayload[] = []
+  const cancelRequests: CancelPayload[] = []
   const handledPaths: string[] = []
   const visitorIds: Array<string | null> = []
 
   let windowScenario: WindowScenario = options.window ?? 'open'
   let registerScenario: RegisterScenario = options.register ?? 'created'
+  let cancelScenario: CancelScenario = options.cancel ?? 'cancelled'
   const lookupScenario: LookupScenario = options.lookup ?? 'ok'
   const roster = options.roster === 'long' ? LONG_ROSTER : TEST_ROSTER
 
@@ -193,6 +222,14 @@ export async function installApiMocks(page: Page, options: MockOptions = {}): Pr
     // --- 등록 창 -------------------------------------------------------
     if (path.endsWith('/registrations/window')) {
       await json(route, 200, windowPayload(windowScenario))
+      return
+    }
+
+    // --- 등록 취소 ------------------------------------------------------
+    // 등록(`/registrations`)보다 **먼저** 검사한다. 경로가 더 구체적이기 때문이다.
+    if (path.endsWith('/registrations/cancel') && request.method() === 'POST') {
+      cancelRequests.push(readPayload(request.postData()) as CancelPayload)
+      await respondCancel(route, cancelScenario, path)
       return
     }
 
@@ -217,6 +254,7 @@ export async function installApiMocks(page: Page, options: MockOptions = {}): Pr
 
   return {
     registrationRequests,
+    cancelRequests,
     handledPaths,
     visitorIds,
     setRegisterScenario(scenario: RegisterScenario): void {
@@ -225,6 +263,47 @@ export async function installApiMocks(page: Page, options: MockOptions = {}): Pr
     setWindowScenario(scenario: WindowScenario): void {
       windowScenario = scenario
     },
+    setCancelScenario(scenario: CancelScenario): void {
+      cancelScenario = scenario
+    },
+  }
+}
+
+/** 취소 실패 문구. 서버가 "등록 없음"과 "비밀번호 틀림"을 구분하지 않으므로 여기서도 하나만 쓴다. */
+export const CANCEL_REJECTED_MESSAGE =
+  '등록 정보 또는 비밀번호가 일치하지 않습니다. 반·이름·호수와 등록할 때 정한 비밀번호를 다시 확인해 주세요.'
+
+/** 시도 횟수 초과 문구 */
+export const CANCEL_LOCKED_MESSAGE =
+  '취소 시도가 10회를 넘어 오늘은 더 시도할 수 없습니다. 문자에 안내된 문의처로 연락해 주세요.'
+
+async function respondCancel(route: Route, scenario: CancelScenario, path: string): Promise<void> {
+  switch (scenario) {
+    case 'cancelled':
+      await json(route, 200, {
+        date: TEST_DATE,
+        cancelledAt: `${TEST_DATE}T21:00:00`,
+        alreadyCancelled: false,
+        message: '취소되었습니다. 오늘 밤 명단에서 빠졌습니다.',
+      })
+      return
+    case 'alreadyCancelled':
+      await json(route, 200, {
+        date: TEST_DATE,
+        cancelledAt: `${TEST_DATE}T20:12:00`,
+        alreadyCancelled: true,
+        message: '이미 취소된 등록입니다. 오늘 밤 명단에 포함되지 않습니다.',
+      })
+      return
+    case 'rejected':
+      await json(route, 400, errorBody('CANCEL_REJECTED', CANCEL_REJECTED_MESSAGE, path))
+      return
+    case 'locked':
+      await json(route, 429, errorBody('CANCEL_LOCKED', CANCEL_LOCKED_MESSAGE, path))
+      return
+    case 'closed':
+      await json(route, 409, errorBody('REGISTRATION_CLOSED', REGISTRATION_CLOSED_MESSAGE, path))
+      return
   }
 }
 
@@ -365,19 +444,29 @@ async function json(
   })
 }
 
-function readPayload(raw: string | null): RegistrationPayload {
+/**
+ * 요청 본문을 읽는다.
+ *
+ * 비밀번호 필드({@code cancelPassword} / {@code password})도 그대로 담는다 —
+ * "프론트가 비밀번호를 실제로 보냈는가", "저장소에 남기지 않았는가"를 테스트가 확인해야 하기 때문이다.
+ * 목이 필드를 조용히 떨어뜨리면 그 검증이 통과해 버린다.
+ */
+function readPayload(raw: string | null): RegistrationPayload & { password?: string } {
+  const empty = { className: '', studentName: '', roomNumber: '' }
   if (!raw) {
-    return { className: '', studentName: '', roomNumber: '' }
+    return empty
   }
   try {
-    const parsed = JSON.parse(raw) as Partial<RegistrationPayload>
+    const parsed = JSON.parse(raw) as Partial<RegistrationPayload & { password: string }>
     return {
       className: parsed.className ?? '',
       studentName: parsed.studentName ?? '',
       roomNumber: parsed.roomNumber ?? '',
+      cancelPassword: parsed.cancelPassword,
+      password: parsed.password,
     }
   } catch {
-    return { className: '', studentName: '', roomNumber: '' }
+    return empty
   }
 }
 

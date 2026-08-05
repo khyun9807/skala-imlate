@@ -26,10 +26,16 @@ import com.skala.imlate.registration.wal.WalStatus;
 /**
  * WAL ↔ DB 대사 서비스(R8, SPEC §5.4).
  *
- * <p>22:00 마감 후 사감 발송(22:10) 직전에 실행되어, Redis WAL 에는 있는데 DB 에는 없는 등록을 찾아
+ * <p>21:45 마감 후 사감 발송(21:50) 직전에 실행되어, Redis WAL 에는 있는데 DB 에는 없는 등록을 찾아
  * DB 로 복구한다. 조회 페이지는 복구 없이 {@link #inspect(LocalDate)} 만 호출한다.
  *
  * <p>WAL 항목의 {@code status}(PENDING/FAILED) 는 판정에 쓰지 않는다. <b>실제 DB 존재 여부</b>로만 판단한다.
+ *
+ * <p><b>취소한 등록은 대사 대상에서 뺀다(V2).</b> 취소는 소프트 삭제라 DB 행이 남지만,
+ * 취소분을 그냥 두면 판정이 양쪽 모두에서 틀어진다 —
+ * WAL 쪽에서만 빼면 "DB 에만 있는 항목"으로 잡혀 사감 보고서에 가짜 불일치가 뜨고,
+ * DB 쪽에서만 빼면 "WAL 에만 있는 항목"으로 잡혀 <u>취소한 등록이 되살아나 명단에 다시 오른다</u>.
+ * 그래서 취소한 사람은 {@code cancelledKeys} 로 모아 양쪽에서 함께 제외한다.
  *
  * <p><b>Redis 장애 시에도 예외를 던지지 않는다.</b> {@code status = WAL_UNAVAILABLE} 로 보고하고
  * 발송/조회는 DB 기준으로 계속 진행된다.
@@ -85,8 +91,22 @@ public class ReconciliationService {
     private ReconciliationReport run(LocalDate date, boolean recover) {
         OffsetDateTime checkedAt = OffsetDateTime.now(clock);
 
-        List<ReturnRegistration> dbRows =
+        // 취소분까지 포함해 읽는다. 취소된 사람도 "DB 에 행이 있다"고 봐야 WAL 을 근거로 되살리지 않는다.
+        List<ReturnRegistration> allRows =
                 registrationRepository.findByRegistrationDateOrderByClassNameAscStudentNameAsc(date);
+
+        // 취소한 사람은 대사의 <b>양쪽에서 모두 제외</b>한다.
+        // WAL 에서만 빼면 "DB 에만 있는 항목"으로 잡혀 사감 보고서에 불일치로 뜨고,
+        // DB 에서만 빼면 "WAL 에만 있는 항목"으로 잡혀 취소한 등록이 되살아난다.
+        Set<String> cancelledKeys = new LinkedHashSet<>();
+        List<ReturnRegistration> dbRows = new ArrayList<>();
+        for (ReturnRegistration row : allRows) {
+            if (row.isCancelled()) {
+                cancelledKeys.add(row.personKey());
+            } else {
+                dbRows.add(row);
+            }
+        }
         long dbCount = dbRows.size();
 
         // --- WAL 읽기: Redis 장애는 예외 대신 WAL_UNAVAILABLE 로 보고한다 ---
@@ -102,9 +122,12 @@ public class ReconciliationService {
             return unavailable(date, dbCount, checkedAt);
         }
 
-        // --- personKey 기준으로 정렬/중복 제거 ---
+        // --- personKey 기준으로 정렬/중복 제거 (취소한 사람은 여기서 걸러낸다) ---
         Map<String, WalEntry> walByPerson = new LinkedHashMap<>();
         for (WalEntry entry : walEntries) {
+            if (cancelledKeys.contains(entry.personKey())) {
+                continue;
+            }
             walByPerson.putIfAbsent(entry.personKey(), entry);
         }
         Set<String> dbKeys = new LinkedHashSet<>();

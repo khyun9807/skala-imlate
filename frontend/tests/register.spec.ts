@@ -38,7 +38,11 @@ const LABEL = {
   className: '반',
   studentName: '이름',
   roomNumber: '기숙사 호수',
+  cancelPassword: '취소 비밀번호',
 } as const
+
+/** 테스트에서 쓰는 취소 비밀번호(숫자 4자리) */
+const CANCEL_PASSWORD = '1234'
 
 /** 등록 버튼 이름 (열림 상태) */
 const SUBMIT_NAME = `${RETURN_TIME_LABEL} 복귀 등록하기`
@@ -51,11 +55,18 @@ async function openRegister(page: Page, options: MockOptions = {}): Promise<ApiM
   return mock
 }
 
-/** 반·이름·호수를 채운다. */
-async function fillForm(page: Page, className: string, studentName: string, roomNumber: string): Promise<void> {
+/** 반·이름·호수와 취소 비밀번호를 채운다. 네 칸이 모두 차야 제출된다. */
+async function fillForm(
+  page: Page,
+  className: string,
+  studentName: string,
+  roomNumber: string,
+  cancelPassword: string = CANCEL_PASSWORD,
+): Promise<void> {
   await page.getByLabel(LABEL.className).fill(className)
   await page.getByLabel(LABEL.studentName).fill(studentName)
   await page.getByLabel(LABEL.roomNumber).fill(roomNumber)
+  await page.getByLabel(LABEL.cancelPassword).fill(cancelPassword)
 }
 
 test.describe('등록 화면 기본 표시', () => {
@@ -230,15 +241,24 @@ test.describe('R6 이전 입력값 기억', () => {
     await page.getByRole('button', { name: SUBMIT_NAME }).click()
 
     await expect(page.getByRole('heading', { name: '등록이 완료되었습니다' })).toBeVisible()
-    expect(mock.registrationRequests).toEqual([{ className: '1반', studentName: '홍길동', roomNumber: '302' }])
+    expect(mock.registrationRequests).toHaveLength(1)
+    expect(mock.registrationRequests[0]).toMatchObject({
+      className: '1반',
+      studentName: '홍길동',
+      roomNumber: '302',
+      // 취소 비밀번호는 서버로 <b>보내지되</b>, 아래에서 보듯 저장되지는 않는다.
+      cancelPassword: CANCEL_PASSWORD,
+    })
 
-    // localStorage 에 실제로 저장되었는지 확인한다.
+    // localStorage 에는 반·이름·호수만 저장한다.
+    // 비밀번호가 여기 섞이면 공용 기기에서 다음 사람이 남의 등록을 취소할 수 있다.
     const saved = await page.evaluate(() => window.localStorage.getItem('imlate.lastInput'))
     expect(saved && (JSON.parse(saved) as Record<string, string>)).toEqual({
       className: '1반',
       studentName: '홍길동',
       roomNumber: '302',
     })
+    expect(saved ?? '').not.toContain(CANCEL_PASSWORD)
 
     // 재방문(새로고침) — 자동 채움
     await page.reload()

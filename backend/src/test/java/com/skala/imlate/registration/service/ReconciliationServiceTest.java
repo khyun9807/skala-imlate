@@ -64,6 +64,47 @@ class ReconciliationServiceTest {
     }
 
     @Test
+    @DisplayName("취소된 등록은 WAL 에 남아 있어도 되살리지 않는다")
+    void 취소된_등록은_되살리지_않는다() {
+        // 취소는 소프트 삭제라 DB 행은 남지만 WAL 항목도 그대로 남아 있다.
+        // 이 둘을 그냥 비교하면 "WAL 에만 있다"고 오판해 취소한 등록을 명단에 다시 올리게 된다.
+        // 그러면 취소가 조용히 무효가 되고, 교육생은 자기가 뺐다고 믿는 이름이 사감 명단에 그대로 있게 된다.
+        ReturnRegistration cancelled = TestFixtures.cancelledRegistration(7L, "1반", "홍길동", "302");
+        dbRows(List.of(cancelled));
+        walRows(List.of(TestFixtures.walEntry("wal-1", TestFixtures.DATE, "1반", "홍길동", "302")));
+
+        ReconciliationReport report = service.reconcile(TestFixtures.DATE);
+
+        // 복구가 일어나지 않아야 한다.
+        verify(registrationWriter, never()).recover(any(), anyBoolean());
+        assertThat(report.recoveredCount()).isZero();
+        // 취소한 사람은 양쪽(DB·WAL) 어디에도 세지 않는다 — 한쪽에서만 빼면 가짜 불일치가 뜬다.
+        assertThat(report.dbCount()).isZero();
+        assertThat(report.walCount()).isZero();
+        assertThat(report.status()).isEqualTo(ReconciliationReport.STATUS_CONSISTENT);
+        assertThat(report.walOnly()).isEmpty();
+        assertThat(report.dbOnly()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("취소한 사람이 섞여 있어도 나머지 인원의 대사는 정상 동작한다")
+    void 취소분이_섞여도_나머지는_정상_대사한다() {
+        ReturnRegistration active = TestFixtures.registration(1L, "1반", "김교육", "301");
+        ReturnRegistration cancelled = TestFixtures.cancelledRegistration(2L, "1반", "홍길동", "302");
+        dbRows(List.of(active, cancelled));
+        walRows(List.of(
+                TestFixtures.walEntry("wal-1", TestFixtures.DATE, "1반", "김교육", "301"),
+                TestFixtures.walEntry("wal-2", TestFixtures.DATE, "1반", "홍길동", "302")));
+
+        ReconciliationReport report = service.reconcile(TestFixtures.DATE);
+
+        assertThat(report.dbCount()).isEqualTo(1L);
+        assertThat(report.walCount()).isEqualTo(1L);
+        assertThat(report.status()).isEqualTo(ReconciliationReport.STATUS_CONSISTENT);
+        verify(registrationWriter, never()).recover(any(), anyBoolean());
+    }
+
+    @Test
     @DisplayName("WAL 에만 있는 등록은 DB 로 복구되고 상태는 RECOVERED 가 된다")
     void WAL_전용_항목을_복구한다() {
         WalEntry missing = TestFixtures.walEntry("wal-1", TestFixtures.DATE, "1반", "홍길동", "302");

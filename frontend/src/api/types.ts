@@ -27,6 +27,33 @@ export interface RegistrationRequest {
   className: string
   studentName: string
   roomNumber: string
+  /**
+   * 나중에 본인이 취소할 때 쓸 비밀번호(숫자 4자리).
+   *
+   * 서버는 해시해서 저장하고 평문을 남기지 않는다. 프론트도 <b>저장하지 않는다</b> —
+   * 이전 입력값 자동 채움(R6)은 반·이름·호수만 기억한다.
+   */
+  cancelPassword: string
+}
+
+/** `POST /registrations/cancel` 요청 바디 */
+export interface CancelRequest {
+  className: string
+  studentName: string
+  roomNumber: string
+  /** 등록할 때 정한 비밀번호(숫자 4자리) */
+  password: string
+}
+
+/** `POST /registrations/cancel` 응답 */
+export interface CancelResponse {
+  date: string
+  /** `2026-08-05T20:15:00` (KST LocalDateTime) */
+  cancelledAt: string
+  /** 이미 취소되어 있던 요청이면 true */
+  alreadyCancelled: boolean
+  /** 화면에 그대로 띄울 안내 문구 */
+  message: string
 }
 
 /** `POST /registrations` 응답 */

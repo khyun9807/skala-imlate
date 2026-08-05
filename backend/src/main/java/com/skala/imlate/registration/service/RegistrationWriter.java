@@ -1,5 +1,7 @@
 package com.skala.imlate.registration.service;
 
+import java.time.LocalDateTime;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -80,6 +82,63 @@ public class RegistrationWriter {
         }
         log.debug("Registration recovered id={} walId={} counted={}",
                 saved.getId(), saved.getWalId(), countAsNewRegistration);
+        return saved;
+    }
+
+    /**
+     * 등록을 취소 상태로 바꾼다(소프트 삭제).
+     *
+     * <p>서비스가 트랜잭션 밖에서 읽어 둔 엔티티는 준영속(detached)이므로 그대로 바꿔도 반영되지 않는다.
+     * 그래서 이 트랜잭션 안에서 PK 로 다시 읽어 변경 감지(dirty checking)에 태운다.
+     *
+     * <p><b>통계는 건드리지 않는다.</b> {@code imlate:stats:reg:*} 는 "그날 등록한 적이 있는 사람 수"이며,
+     * 취소했다고 해서 등록한 적이 없어지는 것은 아니다. 사감이 보는 명단 인원은 통계가 아니라
+     * 실제 명단 조회에서 나오므로 취소분이 섞이지 않는다.
+     *
+     * @param id          등록 PK
+     * @param cancelledAt 취소 시각(KST)
+     * @return 이번 호출로 실제 취소되었으면 true, 이미 취소 상태였으면 false
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean cancel(Long id, LocalDateTime cancelledAt) {
+        ReturnRegistration target = repository.findById(id).orElse(null);
+        if (target == null) {
+            // 취소 검증과 이 호출 사이에 행이 사라진 경우(운영자 수동 삭제 등). 취소 목적은 이미 달성됐다.
+            log.warn("Cancel target disappeared before update id={}", id);
+            return false;
+        }
+        boolean changed = target.cancel(cancelledAt);
+        repository.saveAndFlush(target);
+        log.info("Registration cancelled id={} date={} changed={}", id, target.getRegistrationDate(), changed);
+        return changed;
+    }
+
+    /**
+     * 취소했던 등록을 다시 유효하게 되돌린다(취소 후 재등록).
+     *
+     * <p>유니크 제약 {@code (일자, 반, 이름, 호수)} 이 취소된 행에도 그대로 걸려 있어 새 행을 만들 수 없다.
+     * 그래서 재등록은 INSERT 가 아니라 기존 행 되살리기다.
+     *
+     * <p><b>{@link RegistrationCreatedEvent} 를 발행하지 않는다.</b> 이 사람은 최초 등록 때 이미 집계되었고,
+     * 취소로 통계를 깎지도 않았다. 되살릴 때 다시 올리면 취소→재등록을 반복하는 것만으로
+     * 통계를 부풀릴 수 있다.
+     *
+     * @param id                 등록 PK
+     * @param cancelPasswordHash 이번 등록에서 새로 받은 비밀번호 해시
+     * @param registeredAt       재등록 요청 시각(KST)
+     * @return 되살아난 엔티티. 대상 행이 없으면 null
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public ReturnRegistration reactivate(Long id, String cancelPasswordHash,
+                                         LocalDateTime registeredAt) {
+        ReturnRegistration target = repository.findById(id).orElse(null);
+        if (target == null) {
+            log.warn("Reactivate target disappeared before update id={}", id);
+            return null;
+        }
+        target.reactivate(cancelPasswordHash, registeredAt);
+        ReturnRegistration saved = repository.saveAndFlush(target);
+        log.info("Registration reactivated id={} date={}", id, saved.getRegistrationDate());
         return saved;
     }
 }

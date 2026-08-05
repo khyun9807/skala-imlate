@@ -12,6 +12,7 @@
  */
 
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 
 import AppHeader from '../components/AppHeader.vue'
 import CountdownBadge from '../components/CountdownBadge.vue'
@@ -35,23 +36,29 @@ import {
 const ALLOWED_PATTERN = /^[가-힣A-Za-z0-9 ()\-]{1,20}$/
 const MAX_LENGTH = 20
 
-type FieldKey = 'className' | 'studentName' | 'roomNumber'
+/** 취소 비밀번호 자릿수. 서버 `imlate.registration.cancel.password-length` 와 같아야 한다. */
+const PASSWORD_LENGTH = 4
+const PASSWORD_PATTERN = /^[0-9]{4}$/
+
+type FieldKey = 'className' | 'studentName' | 'roomNumber' | 'cancelPassword'
 
 const REQUIRED_MESSAGES: Record<FieldKey, string> = {
   className: '반을 입력해 주세요.',
   studentName: '이름을 입력해 주세요.',
   roomNumber: '기숙사 호수를 입력해 주세요.',
+  cancelPassword: `비밀번호 숫자 ${PASSWORD_LENGTH}자리를 입력해 주세요.`,
 }
 
 const TOO_LONG_MESSAGES: Record<FieldKey, string> = {
   className: `반은 ${MAX_LENGTH}자 이하로 입력해 주세요.`,
   studentName: `이름은 ${MAX_LENGTH}자 이하로 입력해 주세요.`,
   roomNumber: `기숙사 호수는 ${MAX_LENGTH}자 이하로 입력해 주세요.`,
+  cancelPassword: `비밀번호는 숫자 ${PASSWORD_LENGTH}자리로 입력해 주세요.`,
 }
 
 const PATTERN_MESSAGE = '한글·영문·숫자와 공백, 괄호( ), 하이픈(-)만 사용할 수 있습니다.'
 
-const FIELD_KEYS: FieldKey[] = ['className', 'studentName', 'roomNumber']
+const FIELD_KEYS: FieldKey[] = ['className', 'studentName', 'roomNumber', 'cancelPassword']
 
 const {
   windowInfo,
@@ -73,9 +80,24 @@ const {
   clearSaved,
 } = useLastInput()
 
-const form = reactive<Record<FieldKey, string>>({ className: '', studentName: '', roomNumber: '' })
-const errors = reactive<Record<FieldKey, string>>({ className: '', studentName: '', roomNumber: '' })
-const touched = reactive<Record<FieldKey, boolean>>({ className: false, studentName: false, roomNumber: false })
+const form = reactive<Record<FieldKey, string>>({
+  className: '',
+  studentName: '',
+  roomNumber: '',
+  cancelPassword: '',
+})
+const errors = reactive<Record<FieldKey, string>>({
+  className: '',
+  studentName: '',
+  roomNumber: '',
+  cancelPassword: '',
+})
+const touched = reactive<Record<FieldKey, boolean>>({
+  className: false,
+  studentName: false,
+  roomNumber: false,
+  cancelPassword: false,
+})
 
 const submitting = ref(false)
 const formError = ref('')
@@ -85,6 +107,7 @@ const result = ref<RegistrationResponse | null>(null)
 const classFieldRef = ref<InstanceType<typeof FormField> | null>(null)
 const nameFieldRef = ref<InstanceType<typeof FormField> | null>(null)
 const roomFieldRef = ref<InstanceType<typeof FormField> | null>(null)
+const passwordFieldRef = ref<InstanceType<typeof FormField> | null>(null)
 const resultRef = ref<InstanceType<typeof ResultCard> | null>(null)
 
 /** 마감 시각 라벨 (`21:45`). 서버 `closesAt` 에서 유도한다. */
@@ -165,6 +188,15 @@ function normalize(value: string): string {
 }
 
 function validateField(key: FieldKey): string {
+  // 비밀번호는 숫자 고정 자릿수라 문자 규칙·길이 규칙이 나머지 필드와 다르다.
+  if (key === 'cancelPassword') {
+    const password = form.cancelPassword.trim()
+    if (password.length === 0) {
+      return REQUIRED_MESSAGES.cancelPassword
+    }
+    return PASSWORD_PATTERN.test(password) ? '' : TOO_LONG_MESSAGES.cancelPassword
+  }
+
   const value = normalize(form[key])
   if (value.length === 0) {
     return REQUIRED_MESSAGES[key]
@@ -184,7 +216,9 @@ function onFieldBlur(key: FieldKey): void {
 }
 
 function onFieldInput(key: FieldKey, value: string): void {
-  form[key] = value
+  // 비밀번호 칸에서는 숫자가 아닌 글자를 아예 받지 않는다. 모바일 자판 특성상
+  // 오타가 잦은데, 나중에 취소하려 할 때야 "틀렸다"고 알게 되면 되돌릴 방법이 없다.
+  form[key] = key === 'cancelPassword' ? value.replace(/\D/g, '').slice(0, PASSWORD_LENGTH) : value
   if (touched[key]) {
     errors[key] = validateField(key)
   }
@@ -198,6 +232,10 @@ function focusField(key: FieldKey): void {
   }
   if (key === 'studentName') {
     nameFieldRef.value?.focus()
+    return
+  }
+  if (key === 'cancelPassword') {
+    passwordFieldRef.value?.focus()
     return
   }
   roomFieldRef.value?.focus()
@@ -224,7 +262,10 @@ async function onSubmit(): Promise<void> {
     return
   }
 
-  const payload = {
+  // 기억해 둘 값(반·이름·호수)과 비밀번호를 분리한다.
+  // 비밀번호는 절대 저장하지 않는다 — 공용 기기에서 그 값이 남으면
+  // 다음 사람이 남의 등록을 취소할 수 있고, 그러면 그 사람은 명단에서 사라진 줄도 모른 채 문 밖에 갇힌다.
+  const identity = {
     className: normalize(form.className),
     studentName: normalize(form.studentName),
     roomNumber: normalize(form.roomNumber),
@@ -234,9 +275,9 @@ async function onSubmit(): Promise<void> {
   formError.value = ''
   let focusTarget: FieldKey | null = null
   try {
-    const response = await createRegistration(payload)
+    const response = await createRegistration({ ...identity, cancelPassword: form.cancelPassword.trim() })
     result.value = response
-    remember(payload)
+    remember(identity)
     statusMessage.value = response.duplicate
       ? '이미 등록되어 있습니다.'
       : `등록이 완료되었습니다. ${returnTimeLabel.value}에 복귀해 주세요.`
@@ -295,15 +336,20 @@ function handleSubmitError(error: unknown): FieldKey | null {
   return firstInvalid
 }
 
-/** 다른 인원을 이어서 등록할 수 있도록 이름/호수를 비운다. */
+/** 다른 인원을 이어서 등록할 수 있도록 이름/호수/비밀번호를 비운다. */
 function registerAnother(): void {
   result.value = null
   form.studentName = ''
   form.roomNumber = ''
+  // 비밀번호도 반드시 비운다. 남겨 두면 다음 사람 등록에 앞사람 비밀번호가 그대로 붙어,
+  // 정작 본인은 자기 비밀번호를 모르는 상태가 된다(= 취소할 수 없다).
+  form.cancelPassword = ''
   errors.studentName = ''
   errors.roomNumber = ''
+  errors.cancelPassword = ''
   touched.studentName = false
   touched.roomNumber = false
+  touched.cancelPassword = false
   statusMessage.value = '새로 입력할 수 있습니다.'
   void nextTick(() => focusField('studentName'))
 }
@@ -444,6 +490,24 @@ function clearSavedInput(): void {
             @blur="onFieldBlur('roomNumber')"
           />
 
+          <FormField
+            id="cancelPassword"
+            ref="passwordFieldRef"
+            label="취소 비밀번호"
+            type="password"
+            :model-value="form.cancelPassword"
+            :error="errors.cancelPassword"
+            :disabled="isClosed || submitting"
+            :maxlength="PASSWORD_LENGTH"
+            placeholder="숫자 4자리"
+            hint="등록을 취소할 때 필요합니다. 잊지 않도록 기억해 주세요. (저장되지 않습니다)"
+            autocomplete="off"
+            inputmode="numeric"
+            enterkeyhint="done"
+            @update:model-value="(value: string) => onFieldInput('cancelPassword', value)"
+            @blur="onFieldBlur('cancelPassword')"
+          />
+
           <p class="form__error" aria-live="polite">
             <span v-if="formError" class="alert alert--danger" role="alert">{{ formError }}</span>
           </p>
@@ -456,6 +520,21 @@ function clearSavedInput(): void {
             <button type="button" class="btn btn--ghost" @click="clearSavedInput">저장된 정보 지우기</button>
           </p>
         </form>
+      </section>
+
+      <!--
+        취소 안내. 등록 화면에서 바로 갈 수 있어야 한다 —
+        "등록은 했는데 계획이 바뀐" 사람이 취소 방법을 찾지 못하면 결국 사감에게 전화가 간다.
+      -->
+      <section class="card card--flat no-print" aria-labelledby="cancel-guide-title">
+        <h2 id="cancel-guide-title" class="card__title">등록을 취소하려면</h2>
+        <p class="text-sm text-muted">
+          반·이름·기숙사 호수와 등록할 때 정한 비밀번호를 입력하면 취소할 수 있습니다.
+          <span v-if="closeTimeLabel">취소도 {{ closeTimeLabel }}까지만 가능합니다.</span>
+        </p>
+        <p class="form__foot">
+          <RouterLink class="btn btn--secondary" to="/cancel">등록 취소하기</RouterLink>
+        </p>
       </section>
 
       <section class="card card--flat" aria-labelledby="notice-title">

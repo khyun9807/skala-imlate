@@ -52,6 +52,7 @@ class RegistrationServiceTest {
     private RegistrationWalRepository walRepository;
     private RegistrationWriter registrationWriter;
     private RegistrationWindowPolicy windowPolicy;
+    private CancelAttemptGuard cancelAttemptGuard;
     private RegistrationService service;
 
     @BeforeEach
@@ -66,8 +67,15 @@ class RegistrationServiceTest {
         when(registrationWriter.insert(any(ReturnRegistration.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
+        cancelAttemptGuard = mock(CancelAttemptGuard.class);
+        // 이 테스트의 관심사는 등록 흐름이다. 시도 제한은 CancelAttemptGuardTest 에서 따로 본다.
+        when(cancelAttemptGuard.personKey(anyString(), anyString(), anyString())).thenReturn("person-hash");
+        when(cancelAttemptGuard.allowAttempt(any(), anyString())).thenReturn(true);
+        when(cancelAttemptGuard.maxAttempts()).thenReturn(10);
+
         service = new RegistrationService(registrationRepository, walRepository, registrationWriter,
-                windowPolicy, TestFixtures.imlateProperties(), TestFixtures.clockAt(LocalTime.of(21, 3, 11)));
+                windowPolicy, TestFixtures.cancelPasswordHasher(), cancelAttemptGuard,
+                TestFixtures.imlateProperties(), TestFixtures.clockAt(LocalTime.of(21, 3, 11)));
     }
 
     private void existing(Optional<ReturnRegistration> result) {
@@ -76,7 +84,7 @@ class RegistrationServiceTest {
     }
 
     private static RegistrationCommand command() {
-        return new RegistrationCommand("1반", "홍길동", "302", "1.2.3.4");
+        return new RegistrationCommand("1반", "홍길동", "302", TestFixtures.CANCEL_PASSWORD, "1.2.3.4");
     }
 
     @Test
@@ -220,7 +228,7 @@ class RegistrationServiceTest {
         existing(Optional.empty());
 
         RegistrationResult result =
-                service.register(new RegistrationCommand("  1반 ", "홍  길동", " 302  ", "1.2.3.4"));
+                service.register(new RegistrationCommand("  1반 ", "홍  길동", " 302  ", TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
 
         assertThat(result.registration().getClassName()).isEqualTo("1반");
         assertThat(result.registration().getStudentName()).isEqualTo("홍 길동");
@@ -234,10 +242,10 @@ class RegistrationServiceTest {
     @Test
     @DisplayName("허용되지 않은 문자·빈 값·길이 초과는 VALIDATION_FAILED 로 거부하고 WAL 도 남기지 않는다")
     void 잘못된_입력은_검증에서_거부된다() {
-        assertValidationFailure(new RegistrationCommand("<script>", "홍길동", "302", "1.2.3.4"));
-        assertValidationFailure(new RegistrationCommand("1반", "  ", "302", "1.2.3.4"));
-        assertValidationFailure(new RegistrationCommand("1반", "홍길동", null, "1.2.3.4"));
-        assertValidationFailure(new RegistrationCommand("1반", "가".repeat(21), "302", "1.2.3.4"));
+        assertValidationFailure(new RegistrationCommand("<script>", "홍길동", "302", TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
+        assertValidationFailure(new RegistrationCommand("1반", "  ", "302", TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
+        assertValidationFailure(new RegistrationCommand("1반", "홍길동", null, TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
+        assertValidationFailure(new RegistrationCommand("1반", "가".repeat(21), "302", TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
 
         verifyNoInteractions(walRepository);
         verify(registrationWriter, never()).insert(any(ReturnRegistration.class));
@@ -256,7 +264,7 @@ class RegistrationServiceTest {
     void 클라이언트_IP_가_없으면_unknown_으로_기록한다() {
         existing(Optional.empty());
 
-        service.register(new RegistrationCommand("1반", "홍길동", "302", "  "));
+        service.register(new RegistrationCommand("1반", "홍길동", "302", TestFixtures.CANCEL_PASSWORD, "  "));
 
         ArgumentCaptor<WalEntry> walCaptor = ArgumentCaptor.forClass(WalEntry.class);
         verify(walRepository).append(walCaptor.capture());
