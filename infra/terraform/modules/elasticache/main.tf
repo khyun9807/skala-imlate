@@ -28,11 +28,15 @@ terraform {
   }
 }
 
-# ElastiCache AUTH token 제약: 16~128자, 인쇄 가능 ASCII, / " @ 사용 불가
+# ElastiCache AUTH token 제약 (AWS 문서 기준)
+#   - 16~128자
+#   - 허용되는 특수문자는 딱 8개: ! & # $ ^ < > -
+#     (% * ( ) _ = + / " @ 공백 등은 전부 거부되며 CreateReplicationGroup 이
+#      "InvalidParameterValue: Invalid AuthToken provided" 로 실패한다)
 resource "random_password" "auth" {
   length           = 48
   special          = true
-  override_special = "!#$%^&*()-_=+"
+  override_special = "!&#$^<>-"
   min_lower        = 2
   min_upper        = 2
   min_numeric      = 2

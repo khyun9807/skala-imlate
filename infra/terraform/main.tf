@@ -543,9 +543,16 @@ module "github_oidc" {
   github_repo          = var.github_repo
   allowed_branches     = var.github_allowed_branches
 
-  # 배포 아티팩트 버킷과 배포 대상 인스턴스로 권한을 좁힌다.
   artifact_bucket_name = var.artifact_bucket_name
-  target_instance_ids  = var.artifact_bucket_name != "" ? [module.ec2.instance_id] : []
+
+  # 배포 대상은 **태그 조건**으로 좁힌다(ssm:resourceTag).
+  #
+  # 여기서 module.ec2.instance_id 를 참조하면 github_oidc 가 ec2 에 의존하게 되고,
+  # ec2 는 ssm → rds/elasticache → network 로 이어지므로
+  # `terraform apply -target=module.github_oidc` 가 인프라 전체를 만들어 버린다
+  # (-target 은 대상의 의존성을 함께 적용한다). OIDC 역할은 IAM 만 있으면 되므로
+  # 인스턴스에 의존시키지 않는다. 태그 조건만으로도 이 프로젝트의 인스턴스로 제한된다.
+  target_instance_ids = []
   target_instance_tags = {
     Project = var.project
     Env     = var.environment

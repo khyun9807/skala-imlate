@@ -224,8 +224,10 @@ data "aws_iam_policy_document" "deploy" {
 # 역할
 # ---------------------------------------------------------------------
 resource "aws_iam_role" "github_actions" {
-  name                 = "${var.name_prefix}-github-actions-deploy"
-  description          = "GitHub Actions(OIDC) 배포 역할 — ${local.github_repo_fullname}"
+  name = "${var.name_prefix}-github-actions-deploy"
+  # IAM description 은 ASCII/Latin-1 범위만 허용한다(한글 불가).
+  # 한글을 넣으면 CreateRole 이 ValidationError 로 실패하므로 영문으로 적는다.
+  description          = "GitHub Actions OIDC deploy role for ${local.github_repo_fullname}"
   assume_role_policy   = data.aws_iam_policy_document.assume_role.json
   max_session_duration = var.max_session_duration
 
