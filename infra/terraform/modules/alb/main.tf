@@ -43,7 +43,10 @@ resource "aws_lb" "this" {
 }
 
 resource "aws_lb_target_group" "app" {
-  name        = "${var.name_prefix}-tg"
+  # create_before_destroy 와 고정 이름을 함께 쓰면 포트 변경 등으로 교체될 때
+  # "Target Group already exists" 로 실패한다. name_prefix 를 쓰면 AWS 가 접미사를
+  # 붙여 고유 이름을 만들어 주므로 무중단 교체가 가능하다. (name_prefix 는 최대 6자)
+  name_prefix = "imlate"
   port        = var.target_port
   protocol    = "HTTP"
   vpc_id      = var.vpc_id

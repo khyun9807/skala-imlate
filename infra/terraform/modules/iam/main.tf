@@ -43,8 +43,17 @@ locals {
     "arn:${local.partition}:ssm:${local.region}:${local.account_id}:parameter${var.ssm_path_prefix}/*",
   ]
 
-  # SES 아이덴티티가 아직 없으면(모듈 비활성) 와일드카드로 둔다.
-  ses_resource_arns = length(var.ses_resource_arns) > 0 ? var.ses_resource_arns : ["*"]
+  # SES v2 SendEmail 은 발신 아이덴티티뿐 아니라 **수신 아이덴티티에 대해서도** 권한을 평가한다.
+  # (샌드박스 운영 시 수신 주소가 아이덴티티로 등록되어 있기 때문. 발신 ARN 만 허용하면
+  #  "not authorized to perform ses:SendEmail on resource .../identity/<수신주소>" 403 이 난다.)
+  # 사감 이메일이 바뀔 때마다 IAM 을 다시 적용해야 하는 운영 위험을 피하려고, 계정·리전 내
+  # SES 아이덴티티 전체를 대상에 포함한다. 허용 액션은 SendEmail/SendRawEmail 둘뿐이고
+  # 이 계정은 본 서비스 전용이므로 실질 위험이 낮다.
+  ses_identity_wildcard_arn = "arn:${local.partition}:ses:${local.region}:${local.account_id}:identity/*"
+
+  ses_resource_arns = length(var.ses_resource_arns) > 0 ? distinct(concat(
+    var.ses_resource_arns, [local.ses_identity_wildcard_arn]
+  )) : ["*"]
 
   kms_key_arns = distinct(concat([data.aws_kms_alias.ssm.target_key_arn], var.kms_key_arns))
 

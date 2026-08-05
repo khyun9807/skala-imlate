@@ -343,6 +343,13 @@ deploy_via_ssm() {
 }
 JSON
 
+  # Windows(Git Bash/MSYS)에서 실행하면 aws.exe 는 네이티브 Windows 경로만 이해한다.
+  # "/c/Users/..." 를 그대로 넘기면 "Unable to load paramfile" 로 실패하므로 변환한다.
+  local commands_file_uri="$commands_file"
+  if command -v cygpath >/dev/null 2>&1; then
+    commands_file_uri="$(cygpath -m "$commands_file")"
+  fi
+
   log "SSM RunCommand 전송: $INSTANCE_ID"
   local command_id
   command_id="$(aws ssm send-command \
@@ -351,7 +358,7 @@ JSON
     --document-name "AWS-RunShellScript" \
     --comment "imlate deploy $STAMP" \
     --timeout-seconds 600 \
-    --parameters "file://$commands_file" \
+    --parameters "file://$commands_file_uri" \
     --query 'Command.CommandId' \
     --output text)"
 
