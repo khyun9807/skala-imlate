@@ -296,3 +296,14 @@ output "next_steps" {
     "7. 시크릿 변경 시: SSM 파라미터 수정 → sudo systemctl restart imlate-env imlate",
   ])
 }
+
+# ---------------- GitHub Actions (CI/CD) ----------------
+output "github_actions_role_arn" {
+  description = "GitHub Actions 가 맡을 역할 ARN. 리포지터리 Secret 'AWS_ROLE_ARN' 에 넣는다."
+  value       = one(module.github_oidc[*].role_arn)
+}
+
+output "github_actions_allowed_subjects" {
+  description = "AssumeRole 이 허용된 토큰 sub 목록. 배포가 거부되면 실제 토큰 sub 와 대조한다."
+  value       = one(module.github_oidc[*].allowed_subjects)
+}

@@ -522,3 +522,32 @@ resource "aws_lb_target_group_attachment" "app" {
   target_id        = module.ec2.instance_id
   port             = var.alb_target_port
 }
+
+# ---------------------------------------------------------------------
+# GitHub Actions 배포 역할 (OIDC)
+#
+#   GitHub Actions 가 장기 액세스 키 없이 AWS 에 접근하도록 OIDC 신뢰 관계를 만든다.
+#   sub 조건을 리포지터리·브랜치로 제한하므로 다른 리포에서는 이 역할을 맡을 수 없다.
+#
+#   enable_github_oidc = false 로 두면 아무것도 만들지 않는다(CI/CD 를 안 쓰는 환경).
+#   OIDC 역할만 먼저 만들고 싶으면:
+#     terraform apply -target=module.github_oidc
+# ---------------------------------------------------------------------
+module "github_oidc" {
+  source = "./modules/github-oidc"
+  count  = var.enable_github_oidc ? 1 : 0
+
+  name_prefix          = local.name_prefix
+  create_oidc_provider = var.github_oidc_create_provider
+  github_owner         = var.github_owner
+  github_repo          = var.github_repo
+  allowed_branches     = var.github_allowed_branches
+
+  # 배포 아티팩트 버킷과 배포 대상 인스턴스로 권한을 좁힌다.
+  artifact_bucket_name = var.artifact_bucket_name
+  target_instance_ids  = var.artifact_bucket_name != "" ? [module.ec2.instance_id] : []
+  target_instance_tags = {
+    Project = var.project
+    Env     = var.environment
+  }
+}

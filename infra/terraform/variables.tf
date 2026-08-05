@@ -690,3 +690,44 @@ variable "supervisor2_email" {
   type        = string
   sensitive   = true
 }
+
+# ---------------- GitHub Actions (CI/CD) ----------------
+variable "enable_github_oidc" {
+  description = <<-EOT
+    GitHub Actions 배포용 OIDC 역할을 만들지 여부.
+
+    true 면 IAM OIDC 공급자(선택) + 배포 역할이 생성된다. IAM 리소스라 과금은 없다.
+    생성 후 `terraform output -raw github_actions_role_arn` 값을 리포지터리 시크릿
+    AWS_ROLE_ARN 에 넣으면 .github/workflows/deploy.yml 이 이 역할을 맡는다.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "github_oidc_create_provider" {
+  description = <<-EOT
+    IAM OIDC 공급자를 이 스택이 직접 만들지 여부.
+    한 AWS 계정에 GitHub OIDC 공급자는 하나만 존재할 수 있다. 다른 프로젝트가 이미
+    만들어 두었다면 false 로 두어 기존 것을 참조한다(EntityAlreadyExists 회피).
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "github_owner" {
+  description = "GitHub 소유자(사용자 또는 조직)"
+  type        = string
+  default     = "khyun9807"
+}
+
+variable "github_repo" {
+  description = "GitHub 리포지터리 이름"
+  type        = string
+  default     = "skala-imlate"
+}
+
+variable "github_allowed_branches" {
+  description = "이 역할을 맡을 수 있는 브랜치 목록. 배포는 main 에서만 하는 것을 권장한다."
+  type        = list(string)
+  default     = ["main"]
+}
