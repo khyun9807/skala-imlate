@@ -2,6 +2,10 @@
  * 등록 화면(`/`) 기능 E2E.
  *
  * 검증 항목
+ * - 시간 안내(요구사항 3): 열림 / 마감 임박 / 마감 세 상태에서 각각 무엇을 안내하는가
+ *   · 열림   — 오늘 몇 시까지 등록 가능한지 + 남은 시간 + 명단이 언제 전달되는지
+ *   · 임박   — 10분 이하일 때 시각적 강조
+ *   · 마감   — **내일 00:00 부터 다음 날 밤 복귀 등록이 열린다** (이번 요구의 핵심)
  * - R6 이전 입력값 기억 → 재방문 시 자동 채움
  * - 중복 등록 안내 (200 + duplicate=true)
  * - 마감(window.open=false) 시 폼 비활성 + 마감 안내
@@ -16,7 +20,12 @@ import type { Page } from '@playwright/test'
 
 import {
   CLOSE_TIME_LABEL,
+  CLOSING_SOON_COUNTDOWN_LABEL,
+  CURFEW_TIME_LABEL,
   FORBIDDEN_PATHS,
+  NEXT_OPEN_LABEL,
+  OPEN_COUNTDOWN_LABEL,
+  REGISTRATION_CLOSED_MESSAGE,
   RETRY_AFTER_SECONDS,
   RETURN_TIME_LABEL,
   TEST_DATE_LABEL,
@@ -54,15 +63,14 @@ test.describe('등록 화면 기본 표시', () => {
     await openRegister(page)
 
     await expect(page.getByText(TEST_DATE_LABEL)).toBeVisible()
-    await expect(page.getByRole('timer')).toContainText(`오늘 ${CLOSE_TIME_LABEL} 마감까지 남은 시간`)
-    await expect(page.getByRole('timer')).toContainText('1시간 00분 00초')
+    await expect(page.getByRole('timer')).toContainText(OPEN_COUNTDOWN_LABEL)
     await expect(page.getByText(`${RETURN_TIME_LABEL} 일괄 복귀`)).toBeVisible()
     await expect(page.getByRole('button', { name: SUBMIT_NAME })).toBeEnabled()
   })
 
   test('모든 API 요청에 X-Visitor-Id 헤더가 실린다 (SPEC §7.1)', async ({ page }) => {
     const mock = await openRegister(page)
-    await expect(page.getByRole('timer')).toContainText('1시간 00분 00초')
+    await expect(page.getByRole('timer')).toContainText(OPEN_COUNTDOWN_LABEL)
 
     await fillForm(page, '1반', '홍길동', '302')
     await page.getByRole('button', { name: SUBMIT_NAME }).click()
@@ -79,6 +87,105 @@ test.describe('등록 화면 기본 표시', () => {
   })
 })
 
+test.describe('시간 안내 (요구사항 3)', () => {
+  /** 마감 임박 안내 문구 */
+  const CLOSING_SOON_FLAG = '마감 임박'
+  /** 명단 전달 시점 안내. window 응답에 발송 시각이 없으므로 시각을 단정하지 않는다. */
+  const DISPATCH_NOTICE = '지금 등록하면 마감 직후 사감 선생님께 명단이 전달됩니다.'
+
+  test('열림 — 몇 시까지 등록 가능한지·남은 시간·명단 전달 시점이 한눈에 보인다', async ({ page }) => {
+    await openRegister(page)
+
+    const timer = page.getByRole('timer')
+    // 1) 오늘 몇 시까지 등록할 수 있는지
+    await expect(timer).toContainText(`오늘 ${CLOSE_TIME_LABEL}까지 등록할 수 있어요`)
+    // 2) 마감까지 남은 시간 (기존 카운트다운 유지)
+    await expect(timer).toContainText(OPEN_COUNTDOWN_LABEL)
+    await expect(timer).toContainText('마감까지 남은 시간')
+    // 3) 등록하면 명단이 언제 전달되는지
+    await expect(page.getByText(DISPATCH_NOTICE)).toBeVisible()
+    // 4) 마감 후 언제 다시 열리는지 (마감 전에도 미리 알려 준다)
+    await expect(
+      page.getByText(
+        `${CLOSE_TIME_LABEL} 이후에는 오늘 등록이 닫히고, ${NEXT_OPEN_LABEL}에 다음 날 밤 복귀 등록이 열립니다.`,
+      ),
+    ).toBeVisible()
+
+    // 평시에는 임박 강조가 붙지 않는다.
+    await expect(timer).toHaveClass(/countdown--open/)
+    await expect(page.getByText(CLOSING_SOON_FLAG)).toHaveCount(0)
+  })
+
+  test('마감 임박 — 10분 이하로 남으면 시각적으로 강조한다', async ({ page }) => {
+    await openRegister(page, { window: 'closingSoon' })
+
+    const timer = page.getByRole('timer')
+    await expect(timer).toContainText(CLOSING_SOON_COUNTDOWN_LABEL)
+    await expect(timer).toContainText(CLOSING_SOON_FLAG)
+    await expect(timer).toHaveClass(/countdown--warn/)
+
+    // 임박이지 마감이 아니다 — 아직 등록할 수 있어야 한다.
+    await expect(timer).toContainText(`오늘 ${CLOSE_TIME_LABEL}까지 등록할 수 있어요`)
+    await expect(page.getByRole('button', { name: SUBMIT_NAME })).toBeEnabled()
+    await expect(page.getByLabel(LABEL.studentName)).toBeEnabled()
+  })
+
+  test('마감 — 내일 00:00 부터 다시 열린다는 안내가 보인다', async ({ page }) => {
+    await openRegister(page, { window: 'closed' })
+
+    const timer = page.getByRole('timer')
+    await expect(timer).toContainText('등록 마감')
+    await expect(timer).toContainText(`오늘 밤 복귀 등록은 마감되었습니다 (${CLOSE_TIME_LABEL})`)
+    // 이번 요구의 핵심: 마감 화면이 "언제 다시 되는지"를 알려 준다.
+    await expect(timer).toContainText(`다음 등록 시작: ${NEXT_OPEN_LABEL}`)
+    await expect(page.getByText(`${NEXT_OPEN_LABEL}부터 다음 날 밤 복귀 등록을 받습니다.`)).toBeVisible()
+
+    // 통금 전에 복귀해야 한다는 안내
+    await expect(
+      page.getByText(`${CURFEW_TIME_LABEL} 이후에는 기숙사 문이 잠기니 그 전에 복귀해 주세요.`),
+    ).toBeVisible()
+
+    // 마감 후에는 "지금 등록하면…" 안내가 남아 있으면 안 된다.
+    await expect(page.getByText(DISPATCH_NOTICE)).toHaveCount(0)
+  })
+
+  test('마감 안내는 오늘 날짜의 opensAt 을 "오늘"로 잘못 표기하지 않는다', async ({ page }) => {
+    await openRegister(page, { window: 'closed' })
+
+    await expect(page.getByRole('timer')).toContainText(`다음 등록 시작: ${NEXT_OPEN_LABEL}`)
+    // opensAt(오늘 00:00)은 이미 지난 시각이다. "오늘 00:00 부터"로 새면 안내가 정반대가 된다.
+    await expect(page.getByText('오늘 00:00')).toHaveCount(0)
+  })
+
+  test('화면에 마감 시각이 하드코딩되어 있지 않다 (서버 값 22:00 이면 22:00 으로 표시)', async ({ page }) => {
+    // 서버가 다른 마감 시각을 주면 화면도 따라가야 한다.
+    await installApiMocks(page)
+    await page.route('**/api/v1/registrations/window', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify({
+          date: '2026-08-05',
+          open: true,
+          serverTime: '2026-08-05T21:00:00+09:00',
+          opensAt: '2026-08-05T00:30:00+09:00',
+          closesAt: '2026-08-05T22:00:00+09:00',
+          returnTime: '23:30',
+          curfewTime: '22:30',
+          secondsUntilClose: 3600,
+        }),
+      })
+    })
+    await page.goto('/')
+
+    const timer = page.getByRole('timer')
+    await expect(timer).toContainText('오늘 22:00까지 등록할 수 있어요')
+    await expect(timer).toContainText('1시간 00분 00초')
+    await expect(page.getByText('22:00 이후에는 오늘 등록이 닫히고, 내일 00:30에 다음 날 밤 복귀 등록이 열립니다.')).toBeVisible()
+    await expect(page.getByText(`오늘 ${CLOSE_TIME_LABEL}까지 등록할 수 있어요`)).toHaveCount(0)
+  })
+})
+
 test.describe('인원 수·통계 비노출 (회귀 방지)', () => {
   /**
    * 사용자 피드백 1·2번: 등록 화면에는 "필요한 정보만" 보이고, 집계·통계는 보이지 않는다.
@@ -88,7 +195,7 @@ test.describe('인원 수·통계 비노출 (회귀 방지)', () => {
 
   test('등록 화면에는 인원 수·통계 문구가 없다', async ({ page }) => {
     await openRegister(page)
-    await expect(page.getByRole('timer')).toContainText('1시간 00분 00초')
+    await expect(page.getByRole('timer')).toContainText(OPEN_COUNTDOWN_LABEL)
 
     for (const text of FORBIDDEN_TEXTS) {
       await expect(page.getByText(text), `화면에 남아 있으면 안 되는 문구: ${text}`).toHaveCount(0)
@@ -205,7 +312,7 @@ test.describe('등록 마감', () => {
     const mock = await openRegister(page, { window: 'closed' })
 
     await expect(page.getByRole('timer')).toContainText('등록 마감')
-    await expect(page.getByRole('timer')).toContainText(`오늘 등록은 마감되었습니다 (${CLOSE_TIME_LABEL})`)
+    await expect(page.getByRole('timer')).toContainText(`오늘 밤 복귀 등록은 마감되었습니다 (${CLOSE_TIME_LABEL})`)
 
     await expect(page.getByLabel(LABEL.className)).toBeDisabled()
     await expect(page.getByLabel(LABEL.studentName)).toBeDisabled()
@@ -215,7 +322,8 @@ test.describe('등록 마감', () => {
     await expect(submit).toBeVisible()
     await expect(submit).toBeDisabled()
 
-    await expect(page.getByText('마감 이후에는 등록할 수 없습니다.')).toBeVisible()
+    await expect(page.getByText('오늘 등록하지 못했다면 사감 선생님께 직접 문의해 주세요.')).toBeVisible()
+    await expect(page.getByRole('button', { name: '등록 시간 다시 확인' })).toBeVisible()
     expect(mock.registrationRequests).toHaveLength(0)
   })
 
@@ -225,7 +333,7 @@ test.describe('등록 마감', () => {
     await fillForm(page, '1반', '홍길동', '302')
     await page.getByRole('button', { name: SUBMIT_NAME }).click()
 
-    await expect(page.getByRole('alert')).toContainText('등록 마감 시간(22:00)이 지났습니다.')
+    await expect(page.getByRole('alert')).toContainText(REGISTRATION_CLOSED_MESSAGE)
     await expect(page.getByRole('heading', { name: '등록이 완료되었습니다' })).toHaveCount(0)
   })
 })

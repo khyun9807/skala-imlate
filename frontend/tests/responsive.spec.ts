@@ -15,9 +15,12 @@ import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
 
 import {
+  CLOSING_SOON_COUNTDOWN_LABEL,
   CURFEW_TIME_LABEL,
   LONG_ROSTER,
   LOOKUP_PATH,
+  NEXT_OPEN_LABEL,
+  OPEN_COUNTDOWN_LABEL,
   RETURN_TIME_LABEL,
   TEST_DATE_LABEL,
   TEST_ROSTER,
@@ -47,7 +50,7 @@ async function openRegisterPage(page: Page, options: MockOptions = {}): Promise<
   await installApiMocks(page, options)
   await page.goto('/')
   await expect(page.getByRole('heading', { level: 1, name: '야간 복귀 등록' })).toBeVisible()
-  await expect(page.getByRole('timer')).toContainText('1시간 00분 00초')
+  await expect(page.getByRole('timer')).toContainText(OPEN_COUNTDOWN_LABEL)
   await settle(page)
 }
 
@@ -146,7 +149,19 @@ test.describe('상태 화면 반응형', () => {
       await installApiMocks(page, { window: 'closed' })
       await page.goto('/')
       await expect(page.getByRole('timer')).toContainText('등록 마감')
-      await expect(page.getByText('마감 이후에는 등록할 수 없습니다.')).toBeVisible()
+      // 마감 화면의 핵심 안내(다음 등록 시작)까지 좁은 화면에서 잘리지 않아야 한다.
+      await expect(page.getByText(`${NEXT_OPEN_LABEL}부터 다음 날 밤 복귀 등록을 받습니다.`)).toBeVisible()
+      await settle(page)
+
+      await assertResponsive(page, viewport.width)
+    })
+
+    test(`마감 임박 안내 화면 — ${viewport.name}`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height })
+      await installApiMocks(page, { window: 'closingSoon' })
+      await page.goto('/')
+      await expect(page.getByRole('timer')).toContainText(CLOSING_SOON_COUNTDOWN_LABEL)
+      await expect(page.getByRole('timer')).toContainText('마감 임박')
       await settle(page)
 
       await assertResponsive(page, viewport.width)

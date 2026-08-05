@@ -2,9 +2,13 @@
 
 기숙사 통금은 원래 **22:30**이지만, 교육생 대표와 사감님의 합의로 **23:30까지 연장**되었습니다.
 대신 사감님은 "누가 23:30에 들어오는지" 명단을 미리 받아야 합니다. imlate는 그 과정을 자동화합니다.
-교육생은 **22:00까지** 웹에서 반·이름·호수를 등록하고, **22:10**에 시스템이 Redis WAL ↔ DB 대사를 마친 뒤
+교육생은 **21:45까지** 웹에서 반·이름·호수를 등록하고, **21:50**에 시스템이 Redis WAL ↔ DB 대사를 마친 뒤
 사감님 2분께 **문자(Aligo)와 이메일(Amazon SES)** 로 보기 좋은 명단과 조회 페이지 링크를 자동 발송합니다.
 등록자가 0명이면 아무것도 보내지 않습니다.
+
+> 등록은 **매일 00:00에 열리고 21:45에 닫힙니다.** 21:45 이후에는 그날 등록을 받지 않으며,
+> 자정(00:00)이 되면 **다음 날 대상** 등록이 새로 열립니다.
+> (마감 21:45 · 발송 21:50 은 운영자 요청으로 앞당겨진 값입니다. 자세한 이력은 [docs/SPEC.md §3](docs/SPEC.md) 참고)
 
 | 영역 | 사용 기술 |
 |---|---|
@@ -25,9 +29,9 @@
 
 | # | 요구사항 | 구현 위치 |
 |---|---|---|
-| R1 | 22:00까지 웹에서 23:30 복귀 등록 | `registration/service/RegistrationWindowPolicy.java`, `frontend/src/views/RegisterView.vue` |
+| R1 | 21:45까지 웹에서 23:30 복귀 등록 | `registration/service/RegistrationWindowPolicy.java`, `frontend/src/views/RegisterView.vue` |
 | R2 | 등록 항목 = 반 / 이름 / 기숙사 호수 | `registration/domain/ReturnRegistration.java`, `registration/web/dto/RegistrationRequest.java` |
-| R3 | 22:10 사감 2명에게 문자+메일, 0명이면 미발송 | `notification/scheduler/CurfewNotificationScheduler.java`, `notification/service/CurfewNotificationService.java` (`skipReason=NO_REGISTRATION`) |
+| R3 | 21:50 사감 2명에게 문자+메일, 0명이면 미발송 | `notification/scheduler/CurfewNotificationScheduler.java`, `notification/service/CurfewNotificationService.java` (`skipReason=NO_REGISTRATION`) |
 | R4 | 목록에 반·이름·호수, 보기 좋은 텍스트 | `notification/template/CurfewNoticeRenderer.java` (전각 폭 2 반영 고정폭 표) |
 | R5 | 미니멀 · 전 디바이스 반응형 · 검증 완료 | `frontend/src/styles/*`, `frontend/src/views/*`, Playwright E2E |
 | R6 | 이전 입력값 기억 → 자동 채움 | `frontend/src/composables/useLastInput.ts` (`imlate.lastInput`, `imlate.recentInputs`) |
@@ -51,7 +55,7 @@
    [교육생 브라우저]                                   [사감님]
    Vue 3 SPA (dist)                                   문자 / 이메일
          │                                                  ▲
-         │ HTTPS                                            │ 22:10
+         │ HTTPS                                            │ 21:50
          ▼                                                  │
    ┌──────────────┐   WAF(IP당 5분 2000요청)                 │
    │     ALB      │                                         │
@@ -82,7 +86,7 @@ sequenceDiagram
     participant D as MySQL
     participant S as stats
     U->>A: POST /api/v1/registrations
-    A->>A: 등록 창 확인(22:00 전) + 정규화/검증
+    A->>A: 등록 창 확인(21:45 전) + 정규화/검증
     A->>D: 동일인 선행 조회 (있으면 duplicate=true, 200)
     A->>R: HSET imlate:wal:{date} walId {PENDING}
     Note over A,R: Redis 장애여도 WARN 후 계속 진행(가용성 우선)
@@ -159,17 +163,29 @@ curl -s -X POST "http://localhost:8080/api/v1/admin/notifications/preview" \
 
 | 시각 | 일어나는 일 | 설정 키 / 구현 |
 |---|---|---|
-| 00:00 | 당일 등록 시작 | `imlate.registration.open-time` |
-| ~22:00 | 교육생이 반·이름·호수 등록 (Redis WAL → MySQL) | `RegistrationService#register` |
-| **22:00 정각** | 등록 마감. 이후 요청은 `409 REGISTRATION_CLOSED` | `imlate.registration.close-time` |
-| **22:10** | 분산 락 → WAL↔DB 대사(누락 복구) → 명단 렌더 → 사감 문자/메일 발송 | `imlate.notification.dispatch-cron` = `0 10 22 * * *` |
-| 22:25, 22:40 | 실패한 채널만 재발송 | `imlate.notification.retry-cron` = `0 25,40 22 * * *` |
+| **00:00** | 당일(= 그날 밤 복귀 대상일) 등록 시작 | `imlate.registration.open-time` |
+| ~21:45 | 교육생이 반·이름·호수 등록 (Redis WAL → MySQL) | `RegistrationService#register` |
+| **21:45 정각** | 등록 마감. 이후 요청은 `409 REGISTRATION_CLOSED` | `imlate.registration.close-time` |
+| **21:50** | 분산 락 → WAL↔DB 대사(누락 복구) → 명단 렌더 → 사감 문자/메일 발송 | `imlate.notification.dispatch-cron` = `0 50 21 * * *` |
+| 22:05, 22:20 | 실패한 채널만 재발송 | `imlate.notification.retry-cron` = `0 5,20 22 * * *` |
 | **22:30** | 기숙사 출입문 잠김(안내 문구용 값) | `imlate.registration.curfew-time` |
 | **23:30** | 명단의 교육생이 일괄 입관(안내 문구용 값) | `imlate.registration.return-time` |
 | 23:55 | 당일 통계를 `daily_stat` 에 선반영 | `imlate.stats.today-snapshot-cron` (코드 기본값 `0 55 23 * * *`) |
 | 00:05 | 전일 통계 확정 + 보존 기간 초과분 정리 | `imlate.stats.snapshot-cron` = `0 5 0 * * *` |
 
+한 줄로 보면 이렇습니다.
+
+```
+00:00 등록 시작 → 21:45 마감 → 21:50 사감 발송 → (22:05 / 22:20 실패분 재시도)
+                → 22:30 출입문 잠김 → 23:30 일괄 개방
+```
+
+**21:45 이후에는 그날 등록이 닫히고, 자정(00:00)에 다음 날 대상 등록이 열립니다.**
+마감과 통금(22:30) 사이 45분은 사감님이 명단을 받아 확인하는 시간입니다.
+
 모든 시각은 **Asia/Seoul** 기준이며, 스케줄러 cron에도 `zone = ${imlate.timezone}` 이 지정되어 있습니다.
+표의 시각은 전부 **설정값의 기본값**일 뿐 코드에 박혀 있지 않습니다 — 변경 절차는
+[docs/OPERATIONS.md §5.2](docs/OPERATIONS.md) 를 보세요.
 
 ---
 

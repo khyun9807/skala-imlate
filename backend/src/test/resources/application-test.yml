@@ -86,9 +86,13 @@ logging:
 imlate:
   timezone: "Asia/Seoul"
 
+  # 운영 기본값과 같은 시각을 쓴다(설정이 어긋나면 테스트가 실제 동작을 검증하지 못한다).
+  #   00:00 등록 시작 → 21:45 마감 → 21:50 발송 → 22:30 통금 → 23:30 일괄 개방
+  #   ※ 시각에 의존하는 단위 테스트는 이 파일이 아니라 TestFixtures 의 고정 Clock 을 쓴다.
+  #     이 값은 컨텍스트 기동 시 바인딩 확인용이다.
   registration:
     open-time: "00:00"
-    close-time: "22:00"
+    close-time: "21:45"
     return-time: "23:30"
     curfew-time: "22:30"
     max-name-length: 20
@@ -117,6 +121,8 @@ imlate:
     retry-cron: "-"
     max-attempts: 1
     lock-ttl-seconds: 60
+    contact-name: "SKALA 운영진"
+    contact-email: "khdev07@naver.com"
     supervisors:
       - name: "테스트 사감"
         phone: "01000000000"

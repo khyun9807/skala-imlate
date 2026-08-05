@@ -7,7 +7,7 @@
 - **시간대**: 모든 시각은 Asia/Seoul 기준
   - `LocalDate` → `"2026-08-05"`
   - `LocalDateTime` → `"2026-08-05T21:03:11"`
-  - `OffsetDateTime` → `"2026-08-05T22:10:00+09:00"`
+  - `OffsetDateTime` → `"2026-08-05T21:50:00+09:00"`
   - 안내용 시각(`returnTime`, `curfewTime`) → `"23:30"` (초 없음)
 - 로컬 기준 호스트: `http://localhost:8080` (프론트 dev 서버 `http://localhost:5173` 이 `/api`를 프록시)
 
@@ -62,9 +62,9 @@
 ```json
 {
   "code": "REGISTRATION_CLOSED",
-  "message": "등록 마감 시간(22:00)이 지났습니다.",
+  "message": "등록 마감 시간(21:45)이 지났습니다.",
   "path": "/api/v1/registrations",
-  "timestamp": "2026-08-05T22:03:11+09:00",
+  "timestamp": "2026-08-05T21:48:11+09:00",
   "errors": []
 }
 ```
@@ -89,7 +89,7 @@
 |---|---|---|
 | `VALIDATION_FAILED` | 400 | 입력 검증 실패, JSON 파싱 실패, 필수 파라미터 누락, 파라미터 타입 오류, 미래 날짜 조회, 통계 기간 오류(최대 366일) |
 | `REGISTRATION_NOT_OPEN` | 409 | 등록 시작 시각(기본 00:00) 이전 |
-| `REGISTRATION_CLOSED` | 409 | 등록 마감 시각(기본 22:00) 이후 |
+| `REGISTRATION_CLOSED` | 409 | 등록 마감 시각(기본 21:45) 이후 |
 | `UNAUTHORIZED` | 401 | `X-Admin-Key` 누락·불일치, 관리자 키 미설정 |
 | `FORBIDDEN` | 403 | 조회 토큰 누락·서명 불일치·만료 |
 | `NOT_FOUND` | 404 | 존재하지 않는 경로/리소스 |
@@ -111,14 +111,19 @@
 
 기본 정책(`imlate.rate-limit.*`):
 
-| 스코프 | 대상 | capacity | refill |
-|---|---|---|---|
-| `global` | 모든 `/api/**` | 120 | 120 / 60초 |
-| `register` | `POST /api/v1/registrations` | 8 | 8 / 60초 |
-| `lookup` | `/api/v1/lookup…` | 40 | 40 / 60초 |
+| 스코프 | 버킷 축 | 대상 | capacity | refill |
+|---|---|---|---|---|
+| `global` | IP | 모든 `/api/**` | 1200 | 1200 / 60초 |
+| `register` | IP | `POST /api/v1/registrations` | 300 | 300 / 60초 |
+| `register-person` | 사람(반\|이름\|호수 해시) | `POST /api/v1/registrations` | 10 | 10 / 60초 |
+| `lookup` | IP | `/api/v1/lookup…` | 120 | 120 / 60초 |
 
 `register`/`lookup` 요청은 **GLOBAL 버킷을 먼저 소비한 뒤** 전용 버킷을 소비합니다.
-즉 등록을 8회 초과로 시도하면 GLOBAL 토큰도 함께 줄어듭니다.
+
+> **IP 축 한도가 큰 이유** — 교육생 200명이 기숙사 공용 와이파이(NAT) 뒤에서 **공인 IP 하나**를
+> 공유합니다. IP 한도를 사람 수 기준으로 잡으면 마감 직전에 정상 교육생이 429 로 막힙니다.
+> 그래서 IP 버킷은 "한 회선의 대량 폭주(DDoS) 차단" 전용이고, 개인 도배는
+> `register-person`(사람 축) 버킷이 막습니다. 배경은 [SPEC.md §8.0](SPEC.md) 참고.
 
 429 본문:
 
@@ -190,9 +195,9 @@
 | 상태 | code | 상황 |
 |---|---|---|
 | 400 | `VALIDATION_FAILED` | 형식 오류 |
-| 409 | `REGISTRATION_CLOSED` | 22:00 정각 이후 |
+| 409 | `REGISTRATION_CLOSED` | 21:45 정각 이후 |
 | 409 | `REGISTRATION_NOT_OPEN` | 등록 시작 전 |
-| 429 | `RATE_LIMITED` | 분당 8회 초과 |
+| 429 | `RATE_LIMITED` | 같은 사람이 분당 10회 초과(사람 축) 또는 한 회선에서 분당 300회 초과(IP 축) |
 
 ```bash
 curl -i -X POST "http://localhost:8080/api/v1/registrations" \
@@ -213,14 +218,25 @@ curl -i -X POST "http://localhost:8080/api/v1/registrations" \
   "open": true,
   "serverTime": "2026-08-05T21:03:11+09:00",
   "opensAt": "2026-08-05T00:00:00+09:00",
-  "closesAt": "2026-08-05T22:00:00+09:00",
+  "closesAt": "2026-08-05T21:45:00+09:00",
   "returnTime": "23:30",
   "curfewTime": "22:30",
-  "secondsUntilClose": 3409
+  "secondsUntilClose": 2509
 }
 ```
 
 `secondsUntilClose`는 마감이 지났으면 `0` 입니다.
+
+| 필드 | 값의 출처 | 기본값 |
+|---|---|---|
+| `opensAt` | `imlate.registration.open-time` | `00:00` |
+| `closesAt` | `imlate.registration.close-time` | **`21:45`** |
+| `curfewTime` | `imlate.registration.curfew-time` | `22:30` (문 잠김 — 변경 없음) |
+| `returnTime` | `imlate.registration.return-time` | `23:30` (일괄 개방 — 변경 없음) |
+
+> **프론트는 이 응답의 값만 쓰고 시각을 하드코딩하지 않습니다.** 마감 시각을 설정으로 바꾸면
+> 카운트다운·안내 문구가 자동으로 따라갑니다.
+> 마감(`closesAt`) 이후에는 그날 등록이 닫히고, 자정에 `date` 가 다음 날로 넘어가면서 다시 열립니다.
 
 ```bash
 curl -s "http://localhost:8080/api/v1/registrations/window"
@@ -252,7 +268,7 @@ curl -s "http://localhost:8080/api/v1/registrations/summary"
 | `date` | 선택 | `yyyy-MM-dd`. 생략하면 오늘. **미래 날짜는 400** |
 | `token` | 필수 | HMAC-SHA256 조회 토큰. 누락·불일치·만료 모두 **403 `FORBIDDEN`** |
 
-토큰은 22:10 발송 문자/메일의 링크에 포함되어 있고, 관리 API `preview`의 `lookupUrl`로도 얻을 수 있습니다.
+토큰은 21:50 발송 문자/메일의 링크에 포함되어 있고, 관리 API `preview`의 `lookupUrl`로도 얻을 수 있습니다.
 기본 유효기간은 `imlate.lookup.token-ttl-hours`(운영 기본 48시간, 로컬 168시간)입니다.
 
 **200 OK**
@@ -260,7 +276,7 @@ curl -s "http://localhost:8080/api/v1/registrations/summary"
 ```json
 {
   "date": "2026-08-05",
-  "generatedAt": "2026-08-05T22:10:00+09:00",
+  "generatedAt": "2026-08-05T21:50:00+09:00",
   "totalCount": 12,
   "returnTime": "23:30",
   "curfewTime": "22:30",
@@ -385,7 +401,7 @@ curl -s "http://localhost:8080/api/v1/stats/daily?from=2026-08-01&to=2026-08-05"
 
 조회 페이지에서 검증 결과를 감췄기 때문에, **운영자가 대사 결과를 확인하는 정식 경로**입니다.
 GET 이므로 **복구는 하지 않고 비교만** 합니다(`ReconciliationService.inspect`). 누락분 복구는
-22:10 발송 경로에서 계속 수행됩니다.
+21:50 발송 경로에서 계속 수행됩니다.
 
 | 쿼리 | 기본값 | 설명 |
 |---|---|---|
@@ -400,7 +416,7 @@ GET 이므로 **복구는 하지 않고 비교만** 합니다(`ReconciliationSer
   "recoveredCount": 0,
   "walOnly": [],
   "dbOnly": [],
-  "checkedAt": "2026-08-05T22:10:00+09:00"
+  "checkedAt": "2026-08-05T21:50:00+09:00"
 }
 ```
 
@@ -493,7 +509,7 @@ curl -s -X POST "http://localhost:8080/api/v1/admin/notifications/retry?date=202
       "targetCount": 12,
       "providerMessageId": "123456789",
       "errorMessage": null,
-      "sentAt": "2026-08-05T22:10:03"
+      "sentAt": "2026-08-05T21:50:03"
     },
     {
       "id": 102,
@@ -505,7 +521,7 @@ curl -s -X POST "http://localhost:8080/api/v1/admin/notifications/retry?date=202
       "targetCount": 12,
       "providerMessageId": null,
       "errorMessage": "SES 발송 실패: MessageRejected - Email address is not verified.",
-      "sentAt": "2026-08-05T22:10:09"
+      "sentAt": "2026-08-05T21:50:09"
     }
   ]
 }

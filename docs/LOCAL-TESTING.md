@@ -40,7 +40,7 @@
 |---|---|---|---|---|---|
 | ① 백엔드 단위/웹 테스트 | `.\gradlew.bat test` | 등록 창 정책, 정규화·검증 규칙, 멱등성, WAL↔DB 대사 로직, 발송 오케스트레이션, 문구 렌더, rate limit 토큰버킷, 조회 토큰 HMAC, 컨트롤러 상태코드 | 불필요 (H2 / Mock) | 1~3분 | 실제 MySQL 방언·인코딩, 실제 Redis 동작, Flyway 마이그레이션, 스케줄러 실제 발화 |
 | ② 프론트 반응형 E2E (90개) | `npm run test:e2e` | 320~2560px 레이아웃 넘침, 다크모드, 폼 검증 문구, 마감/중복/429 안내 문구, 조회 화면 표·검색·인쇄 스타일 | 불필요 (**API 전부 목킹**) | 1~2분 | 백엔드가 실제로 그 응답을 주는지. 목이 거짓말하면 통과한다 |
-| ③ **통합 테스트** | `node scripts/integration-test.mjs` | 기동 중인 앱 + **실제 MySQL/Redis** 로 등록→WAL→DB→대사→발송→조회→통계 전 구간. rate limit 2단(같은 IP·다른 사람 통과 / 같은 사람 도배 429 / XFF 위조 무력화), 토큰 위조 403, 관리 API 401, 중복 발송 skip | **필요** (앱+DB+Redis 기동) | 1분 내외 | 동시성/성능, 스케줄러 발화 시각, 실제 문자·메일 도달 |
+| ③ **통합 테스트** | `node scripts/integration-test.mjs` | 기동 중인 앱 + **실제 MySQL/Redis** 로 등록→WAL→DB→대사→발송→조회→통계 전 구간. 시각 설정 정합성(마감<발송<재시도<통금), 5회 재제출 멱등, 문구 필수 안내(수신 전용·문의처), rate limit 2단(같은 IP·다른 사람 통과 / 같은 사람 도배 429 / XFF 위조 무력화), 토큰 위조 403, 관리 API 401, 중복 발송 skip | **필요** (앱+DB+Redis 기동) | 1분 내외 | 동시성/성능, 스케줄러 발화 시각, 실제 문자·메일 도달 |
 | ④ **부하 테스트** | `node scripts/load-test.mjs` | 동시 등록 처리량·지연, 커넥션 풀·Redis 포화 시 거동, **공용 와이파이(전원 같은 IP) 200명 동시 등록** ([§2.5](#25-공용-와이파이-환경-검증-반드시-본다)) | **필요** | 1~3분 | 정확성. 부하 테스트가 통과해도 데이터가 맞다는 보장은 없다 |
 | ⑤ 장애 훈련 | `node scripts/integration-test.mjs --drills` + [§4](#4-장애-훈련-시나리오) 수동 절차 | Redis/MySQL 정지 중 거동, 발송 실패 재시도, 중복 발송 락 | **필요** | 5~15분 | 실제 AWS 장애 양상(ElastiCache 페일오버, RDS Multi-AZ 전환) |
 | ⑥ 수동 눈 검사 | 브라우저 | 실제 사람이 보는 화면·문구·인쇄물 | 필요 | 10분 | 자동화되지 않으므로 매번 사람이 해야 함 |
@@ -327,20 +327,28 @@ NAT 뒤 200명은 어떤 숫자를 넣어도 결국 막힌다([docs/SPEC.md §8]
 
 ## 3. 시간에 얽힌 시나리오를 로컬에서 검증하는 법 ★가장 중요★
 
-이 시스템의 심장은 **22:00 마감 → 22:10 발송 → 22:25/22:40 재시도** 다.
+이 시스템의 심장은 **21:45 마감 → 21:50 발송 → 22:05/22:20 재시도** 다.
 그런데 그 시각을 기다려서 테스트할 수는 없다. **설정만 바꿔서 몇 분 뒤에 재현**한다.
+
+```
+00:00 등록 시작 → 21:45 마감 → 21:50 발송 → (22:05 / 22:20 재시도)
+                → 22:30 문 잠김 → 23:30 일괄 개방
+```
+
+> 마감 21:45 · 발송 21:50 은 운영자 요청으로 앞당겨진 값이다(원래 22:00 / 22:10).
+> **통금 22:30 과 일괄 개방 23:30 은 바뀌지 않았다.** 아래 시나리오에서 두 값을 건드리지 마라.
 
 ### 3.1 만질 수 있는 스위치 (실제로 존재하는 것만)
 
 | 환경변수 | 프로퍼티 이름 | 기본값 | 의미 |
 |---|---|---|---|
 | `IMLATE_TIMEZONE` | `imlate.timezone` | `Asia/Seoul` | 서비스 기준 시계 + **모든 cron 의 zone** |
-| `IMLATE_REGISTRATION_CLOSE_TIME` | `imlate.registration.close-time` | `22:00` | 이 시각 **정각부터** 등록 거부(`409 REGISTRATION_CLOSED`) |
+| `IMLATE_REGISTRATION_CLOSE_TIME` | `imlate.registration.close-time` | `21:45` | 이 시각 **정각부터** 등록 거부(`409 REGISTRATION_CLOSED`) |
 | `IMLATE_REGISTRATION_RETURN_TIME` | `imlate.registration.return-time` | `23:30` | 안내 문구용 복귀 시각 |
 | `IMLATE_REGISTRATION_CURFEW_TIME` | `imlate.registration.curfew-time` | `22:30` | 안내 문구용 문 잠김 시각 |
 | `IMLATE_NOTIFICATION_ENABLED` | `imlate.notification.enabled` | `true` | `false` 면 스케줄러가 아무것도 하지 않음(`skipReason=DISABLED`) |
-| `IMLATE_NOTIFICATION_DISPATCH_CRON` | `imlate.notification.dispatch-cron` | `0 10 22 * * *` | **정기 발송** cron (6필드, 초 포함) |
-| `IMLATE_NOTIFICATION_RETRY_CRON` | `imlate.notification.retry-cron` | `0 25,40 22 * * *` | **실패 채널 재시도** cron (6필드) |
+| `IMLATE_NOTIFICATION_DISPATCH_CRON` | `imlate.notification.dispatch-cron` | `0 50 21 * * *` | **정기 발송** cron (6필드, 초 포함) = 21:50 |
+| `IMLATE_NOTIFICATION_RETRY_CRON` | `imlate.notification.retry-cron` | `0 5,20 22 * * *` | **실패 채널 재시도** cron (6필드) = 22:05 / 22:20 |
 | `IMLATE_NOTIFICATION_MAX_ATTEMPTS` | `imlate.notification.max-attempts` | `3` | 채널당 최대 시도 횟수(백오프 1s→2s→4s, 상한 8s) |
 | `IMLATE_NOTIFICATION_LOCK_TTL_SECONDS` | `imlate.notification.lock-ttl-seconds` | `300` | 중복 발송 방지 분산 락 TTL |
 | `IMLATE_STATS_SNAPSHOT_CRON` | `imlate.stats.snapshot-cron` | `0 5 0 * * *` | 전일 통계 확정 + 보존기간 정리 |
@@ -365,13 +373,13 @@ NAT 뒤 200명은 어떤 숫자를 넣어도 결국 막힌다([docs/SPEC.md §8]
 
 ```powershell
 # PowerShell — 창 B  ① 환경변수 방식 (프로덕션과 동일한 키를 쓰므로 "진짜" 검증에 가깝다)
-$env:IMLATE_REGISTRATION_CLOSE_TIME = "22:05"
+$env:IMLATE_REGISTRATION_CLOSE_TIME = "21:30"
 .\gradlew.bat bootRun --args='--spring.profiles.active=local'
 ```
 
 ```powershell
 # PowerShell — 창 B  ② --args 방식 (우선순위 최상위. 확실하고, Gradle 데몬 캐시 영향을 안 받는다)
-.\gradlew.bat bootRun --args='--spring.profiles.active=local --imlate.registration.close-time=22:05'
+.\gradlew.bat bootRun --args='--spring.profiles.active=local --imlate.registration.close-time=21:30'
 ```
 
 > **환경변수가 반영되지 않는 것 같으면** Gradle 데몬이 이전 환경을 물고 있는 것이다. 데몬을 죽이고 다시 띄운다.
@@ -388,7 +396,7 @@ $env:IMLATE_REGISTRATION_CLOSE_TIME = "22:05"
 > `imlate.rate-limit.enabled`, `imlate.lookup.token-ttl-hours` 는 local 프로파일에 리터럴로 박혀 있다.
 > 이것들을 바꾸려면 **반드시 `--args` 프로퍼티**로 넘겨야 한다(명령행 인자가 프로파일 yml보다 우선한다).
 
-### 3.3 시나리오 A — "22:00 마감"을 3분 뒤에 재현하기
+### 3.3 시나리오 A — "21:45 마감"을 3분 뒤에 재현하기
 
 ```powershell
 # PowerShell — 창 B  (백엔드를 Ctrl+C 로 멈춘 뒤)
@@ -433,7 +441,7 @@ curl.exe -s -o NUL -w "%{http_code}`n" -X POST "http://localhost:8080/api/v1/reg
 > **한글이 필요하면 curl 을 쓰지 마라.** Windows 콘솔 인코딩 때문에 `400 VALIDATION_FAILED` 가 난다.
 > 위 예시가 `1A` / `Test User` 인 이유가 그것이다. 한글 검증은 브라우저나 `node scripts/integration-test.mjs` 로 한다([§8.4](#84-curl-로-한글을-보내면-400-validation_failed)).
 
-### 3.4 시나리오 B — "22:10 발송"을 2분 뒤에 재현하기
+### 3.4 시나리오 B — "21:50 발송"을 2분 뒤에 재현하기
 
 가장 확실한 방법은 **매 분 발송**으로 걸어 두는 것이다. 첫 분에 발송되고, 다음 분부터는 중복 방지가 동작하는지까지 한 번에 볼 수 있다.
 
@@ -652,7 +660,7 @@ docker compose stop mysql
 |---|---|---|
 | `POST /registrations` | **500** + `code:"INTERNAL_ERROR"`, 메시지 "일시적인 오류가 발생했습니다…" | `RegistrationService.register()` 의 중복 선행 조회(`findExisting`)에서 터진 `DataAccessException` 은 업무 예외가 아니므로 `GlobalExceptionHandler` 의 마지막 핸들러가 500 으로 변환한다. **사용자 응답 문구는 예전과 같다** |
 | Redis WAL | **해당 건이 `status:"PENDING"` 으로 남는다** | WAL append(3단계)가 중복 선행 조회(4단계)보다 **앞**에 있다. DB 접근 실패는 `FAILED` 로 덮어쓰지 않고 `PENDING` 그대로 둔다 — 그래야 대사가 "최초 INSERT 가 실패한 건"으로 보고 통계까지 재집계한다 |
-| 22:10 대사 | **DB 로 복구된다** | `ReconciliationService` 는 WAL 상태가 아니라 **DB 존재 여부**로 복구를 판단한다. 복구된 인원은 사감 명단·문자·메일에 정상 포함된다 |
+| 21:50 대사 | **DB 로 복구된다** | `ReconciliationService` 는 WAL 상태가 아니라 **DB 존재 여부**로 복구를 판단한다. 복구된 인원은 사감 명단·문자·메일에 정상 포함된다 |
 | 등록 통계 | 복구 시점에 **+1** | WAL 상태가 `COMMITTED` 가 아니므로 `countAsNewRegistration=true` — 최초 INSERT 가 실패해 아직 집계되지 않았던 건이다 |
 | `/actuator/health/alb` | **`DOWN` (HTTP 503)** | alb 그룹에 `db` 가 포함되어 있다. 운영에서는 ALB 가 이 인스턴스를 타깃에서 빼는 것이 의도된 동작 |
 | `GET /registrations/window` | **200 정상** | DB 를 쓰지 않는다(시계 계산만) |
@@ -676,7 +684,7 @@ docker compose start mysql
 docker compose ps                                # (healthy) 까지 대기
 curl.exe -s http://localhost:8080/actuator/health/alb        # UP 으로 돌아올 때까지(커넥션 풀 재생성에 몇 초)
 
-# 22:10 대사를 손으로 돌려 복구를 확인한다
+# 21:50 대사를 손으로 돌려 복구를 확인한다
 $K = @{ "X-Admin-Key" = "local-dev-admin-key" }
 Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/admin/notifications/dispatch?date=$D&force=true" -Headers $K
 docker exec imlate-mysql mysql -uimlate -pimlate -D imlate -e "SELECT class_name,student_name,room_number,wal_id FROM return_registration WHERE registration_date=CURDATE();"
@@ -930,12 +938,21 @@ $K = @{ "X-Admin-Key" = "local-dev-admin-key" }
 
 ### 6.2 시간 시나리오 (§3)
 
+- [ ] `integration-test.mjs §1` — **시각 정합성 단언 전부 통과**
+      (`opensAt < closesAt < 통금(22:30) < 복귀(23:30)`, 발송 cron 이 마감 뒤·통금 앞, 재시도가 발송 뒤)
+- [ ] `window` 응답의 `closesAt` 이 **21:45** 이고 `curfewTime` 22:30 · `returnTime` 23:30 은 그대로다
 - [ ] 마감 시각을 앞당겨 **409 REGISTRATION_CLOSED** 를 눈으로 확인했다
 - [ ] 발송 cron 을 앞당겨 **스케줄러가 실제로 발화**하는 것을 로그로 확인했다
 - [ ] 같은 cron 이 두 번 발화했을 때 **ALREADY_SENT** 로 건너뛰는 것을 확인했다
 - [ ] 재시도 cron 발화를 확인했다
 - [ ] `serverTime` 이 `+09:00` 이고 `Service clock initialized with zone=Asia/Seoul` 로그를 확인했다
 - [ ] **실험용으로 바꿨던 환경변수를 전부 원복했다** (`IMLATE_TIMEZONE`, `*_CRON`, `*_CLOSE_TIME`)
+
+**문구 / 멱등성 (운영자가 명시적으로 확인을 요청한 항목)**
+
+- [ ] `integration-test.mjs §10` — 문자·메일 모두에 **수신 전용(답장 불가) 안내**가 들어 있다
+- [ ] `integration-test.mjs §10` — 문자·메일 모두에 **문의처(SKALA 운영진 / khdev07@naver.com)** 가 들어 있다
+- [ ] `integration-test.mjs §5` — **같은 사람 5회 재제출 → DB 행 1건, 2번째부터 200 + `duplicate=true`, `id` 불변**
 
 ### 6.3 장애 훈련 (§4)
 
@@ -970,7 +987,7 @@ $K = @{ "X-Admin-Key" = "local-dev-admin-key" }
 ### 6.6 배포 직후 (참고)
 
 - [ ] [docs/DEPLOYMENT.md](DEPLOYMENT.md) §5 "배포 후 확인" 절차 수행
-- [ ] [docs/OPERATIONS.md](OPERATIONS.md) §1 일일 운영 체크리스트로 첫날 22:10 을 지켜본다
+- [ ] [docs/OPERATIONS.md](OPERATIONS.md) §1 일일 운영 체크리스트로 첫날 21:45 마감 → 21:50 발송을 지켜본다
 
 ---
 
@@ -1147,12 +1164,13 @@ docker exec imlate-mysql mysql -uimlate -pimlate -D imlate --default-character-s
 ### 8.5 등록 창 마감 이후에 통합 테스트를 돌렸다
 
 ```
-등록 창이 닫혀 있어 이후 시험을 진행할 수 없습니다(22:00 이후).
+등록 창이 닫혀 있어 이후 시험을 진행할 수 없습니다(마감 21:45 이후).
 IMLATE_REGISTRATION_CLOSE_TIME=23:59 로 앱을 재기동한 뒤 다시 실행하세요.
 (종료 코드 2)
 ```
 
-통합 테스트는 실제로 등록을 해야 하므로 **등록 창이 열려 있어야 한다**. 22:00 이후에 작업 중이라면:
+괄호 안의 시각은 스크립트가 `window` 응답의 `closesAt` 을 그대로 읽어 찍은 것이다(하드코딩 아님).
+통합 테스트는 실제로 등록을 해야 하므로 **등록 창이 열려 있어야 한다**. 마감(기본 21:45) 이후에 작업 중이라면:
 
 ```powershell
 # PowerShell — 창 B : 백엔드 Ctrl+C 후
@@ -1168,6 +1186,16 @@ export IMLATE_REGISTRATION_CLOSE_TIME=23:59
 
 > **끝나고 반드시 원복한다.** `Remove-Item Env:IMLATE_REGISTRATION_CLOSE_TIME` 후 재기동.
 > 23:59 마감으로 배포하는 사고를 막기 위해 [§6.2](#62-시간-시나리오-3) 체크리스트에도 넣어 두었다.
+
+> **마감을 23:59 로 늘려 두면** 통합 테스트 §1-3(마감 → 발송 → 재시도 → 통금 순서 검사)이
+> **실패가 아니라 "건너뜀"** 으로 표시된다. 결과 요약에 이렇게 찍힌다.
+>
+> ```
+> 건너뜀: 1-3. 시각 정합성(마감 → 발송 → 재시도 → 통금) — 등록 창이 23:59 까지 늘어나 있어 건너뜀. 기본 설정으로 재기동해 한 번은 확인할 것.
+> ```
+>
+> 시험용 설정을 결함으로 보고하지 않기 위한 장치다. **기본 설정(마감 21:45)으로 한 번은 반드시 돌려서
+> 이 항목이 통과하는 것을 확인한다.**
 
 참고로 **자정을 넘겨서** 테스트하면 `targetDate` 가 바뀌므로, 전날 데이터로 발송을 확인하려면 `?date=` 를 명시해야 한다.
 

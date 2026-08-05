@@ -10,14 +10,14 @@
 
 | # | 요구 | 구현 위치 |
 |---|---|---|
-| R1 | 기숙 이용 교육생이 **22:00까지** 웹에서 23:30 복귀 등록 | `registration` 모듈 + 프론트 `/` |
+| R1 | 기숙 이용 교육생이 **21:45까지** 웹에서 23:30 복귀 등록 | `registration` 모듈 + 프론트 `/` |
 | R2 | 등록 항목: **반 / 이름 / 기숙사 호수** | `ReturnRegistration` |
-| R3 | **22:10** 에 사감 2명에게 문자 + 이메일 발송, 0명이면 미발송 | `notification` 모듈 스케줄러 |
+| R3 | **21:50** 에 사감 2명에게 문자 + 이메일 발송, 0명이면 미발송 | `notification` 모듈 스케줄러 |
 | R4 | 목록에 반·이름·호수 포함, 보기 좋은 텍스트 | `CurfewNoticeRenderer` |
 | R5 | 미니멀 · 전 디바이스 반응형 · 검증까지 완료 | `frontend` + Playwright |
 | R6 | 이전 입력값 기억 → 자동 채움 | 프론트 localStorage |
 | R7 | Redis에 WAL 1회 → DB 1회 (누락 방지) | `registration.wal` |
-| R8 | 22:00 마감 후 Redis ↔ DB 대사(검증) → 조회 페이지 노출 | `ReconciliationService` + 프론트 `/lookup` |
+| R8 | 21:45 마감 후 Redis ↔ DB 대사(검증) → 조회 페이지 노출 | `ReconciliationService` + 프론트 `/lookup` |
 | R9 | 조회 페이지 주소 + 안내/통계 문구를 문자·이메일로 발송 | `notification` |
 | R10 | 설정 파일 분리(키/비번/AWS) | `application-*.yml` + `imlate.*` properties |
 | R11 | 문자=Aligo, 메일=Amazon SES | `sms.AligoSmsSender`, `email.SesEmailSender` |
@@ -93,9 +93,28 @@ skala-imlate/
 - 모든 시각은 **Asia/Seoul** 기준. 서버는 `Clock` 빈(`ClockConfig`)을 주입받아 사용한다.
   **`LocalDate.now()` / `LocalDateTime.now()` 를 인자 없이 호출하지 않는다.** 항상 `now(clock)`.
 - `registrationDate` = 등록 시점의 KST 날짜(= 그날 밤 복귀 대상일).
-- 등록 창: `[open-time(기본 00:00), close-time(기본 22:00))`. 22:00:00 이후 등록 거부.
-- 사감 발송: `close-time + 10분` = 22:10 (cron 설정값).
+- 등록 창: `[open-time(기본 00:00), close-time(기본 21:45))`. 21:45:00 이후 등록 거부.
+  **21:45 이후에는 그날 등록이 닫히고, 자정(00:00)에 다음 날 대상 등록이 열린다.**
+- 사감 발송: `close-time + 5분` = 21:50 (cron 설정값 `0 50 21 * * *`).
+- 실패 채널 재시도: 발송 +15분 / +30분 = 22:05, 22:20 (cron 설정값 `0 5,20 22 * * *`).
 - 원래 통금 22:30, 연장 통금 23:30 (안내 문구용 값).
+- 하루 타임라인: `00:00 등록 시작 → 21:45 마감 → 21:50 발송 → (22:05·22:20 재시도) → 22:30 문 잠김 → 23:30 일괄 개방`
+
+> **변경 이력 —** 원 요구(`request.md`)는 **마감 22:00 / 발송 22:10** 이었으나,
+> 운영자 요청으로 **마감 21:45 / 발송 21:50** 으로 조정했다(재시도도 22:25·22:40 → 22:05·22:20 으로 함께 앞당김).
+> 통금 22:30, 일괄 복귀 23:30, 등록 시작 00:00 은 **바뀌지 않았다.**
+> `request.md` 는 원본 요구사항 기록이므로 그대로 둔다.
+
+**위 시각은 전부 설정값이다. 코드에 하드코딩하지 않는다** — 바꾸는 것은 아래 기본값뿐이다.
+
+| 프로퍼티 | 기본값 | 비고 |
+|---|---|---|
+| `imlate.registration.open-time` | `00:00` | 환경변수 없음(yml 직접 수정) |
+| `imlate.registration.close-time` | `21:45` | `IMLATE_REGISTRATION_CLOSE_TIME` |
+| `imlate.notification.dispatch-cron` | `0 50 21 * * *` | `IMLATE_NOTIFICATION_DISPATCH_CRON` |
+| `imlate.notification.retry-cron` | `0 5,20 22 * * *` | `IMLATE_NOTIFICATION_RETRY_CRON` |
+| `imlate.registration.curfew-time` | `22:30` | 안내 문구용 — **변경 없음** |
+| `imlate.registration.return-time` | `23:30` | 안내 문구용 — **변경 없음** |
 
 ---
 
@@ -130,10 +149,12 @@ public record ImlateProperties(
 @ConfigurationProperties(prefix = "imlate.notification")
 public record NotificationProperties(
         boolean enabled,
-        String dispatchCron,          // "0 10 22 * * *"
-        String retryCron,             // "0 25,40 22 * * *"
+        String dispatchCron,          // "0 50 21 * * *"  (마감 21:45 + 5분)
+        String retryCron,             // "0 5,20 22 * * *" (발송 +15분 / +30분)
         int maxAttempts,              // 3
         long lockTtlSeconds,          // 300
+        String contactName,           // "SKALA 운영진"      — 문자/메일 문의처 안내용
+        String contactEmail,          // "khdev07@naver.com" — 문자/메일 문의처 안내용
         List<Supervisor> supervisors
 ) {
     public record Supervisor(String name, String phone, String email) {}
@@ -201,8 +222,8 @@ public class GlobalExceptionHandler { /* ApiException, MethodArgumentNotValidExc
 
 응답 바디 예:
 ```json
-{ "code":"REGISTRATION_CLOSED", "message":"등록 마감 시간(22:00)이 지났습니다.",
-  "path":"/api/v1/registrations", "timestamp":"2026-08-05T22:03:11+09:00", "errors":[] }
+{ "code":"REGISTRATION_CLOSED", "message":"등록 마감 시간(21:45)이 지났습니다.",
+  "path":"/api/v1/registrations", "timestamp":"2026-08-05T21:48:11+09:00", "errors":[] }
 ```
 
 ### 4.3 시간·토큰·유틸 (`common.config`, `common.security`)
@@ -347,7 +368,7 @@ public class RegistrationWalRepository {
    그 밖의 실패 → `updateStatus(FAILED)` 후 예외 전파
 
 > **왜 중복 선행 조회를 WAL append 뒤로 옮겼는가** — 선행 조회가 앞에 있으면 MySQL 이 완전히 죽었을 때
-> WAL 기록에 도달하기도 전에 500 이 나서 Redis 에 아무 흔적도 남지 않고, 22:10 대사로도 복구할 수 없다.
+> WAL 기록에 도달하기도 전에 500 이 나서 Redis 에 아무 흔적도 남지 않고, 21:50 대사로도 복구할 수 없다.
 > 기숙사 도메인에서 "명단 누락 = 교육생이 밖에서 밤을 샌다" 이므로, **DB 장애 중의 등록 의도도 WAL 에 남겨
 > 대사에서 복구되게** 한다(4단계 DB 장애 시 `FAILED` 가 아니라 `PENDING` 으로 두는 이유도 같다 —
 > `PENDING` 이어야 §5.4 의 통계 재집계 판정 `entry.status() != COMMITTED` 가 성립한다).
@@ -438,7 +459,7 @@ DB에만 있는 항목이 남으면 → `MISMATCH`(WAL TTL 만료 가능성이�
 
 `GET /api/v1/lookup?date=2026-08-05&token=…` → **사감용 조회 페이지 데이터**
 ```json
-{ "date":"2026-08-05", "generatedAt":"2026-08-05T22:10:00+09:00", "totalCount":12,
+{ "date":"2026-08-05", "generatedAt":"2026-08-05T21:50:00+09:00", "totalCount":12,
   "returnTime":"23:30", "curfewTime":"22:30",
   "items":[{"no":1,"className":"1반","studentName":"홍길동","roomNumber":"302",
             "registeredAt":"2026-08-05T21:03:11"}],
@@ -529,11 +550,20 @@ public class CurfewNoticeRenderer {
   …
 
 ※ 22:30 이후 문은 잠기며 23:30에 일괄 개방됩니다.
-검증: DB 12 / WAL 12 (일치)
+※ 이 번호는 수신 전용이라 답장을 받을 수 없습니다.
+   문의는 SKALA 운영진 또는 khdev07@naver.com 으로 부탁드립니다.
 전체 명단: https://…/lookup?date=2026-08-05&token=…
 ```
-이메일 텍스트는 `반 | 이름 | 호수` 고정폭 표 + 통계 + 안내 문구.
+이메일 텍스트는 `반 | 이름 | 호수` 고정폭 표 + 안내 문구.
 HTML은 표 + 요약 카드. 한글 깨짐 방지를 위해 charset UTF-8 명시.
+
+**문자·메일 공통 필수 문구 (운영자 요청).** 두 채널 모두에 아래 두 가지가 반드시 들어간다.
+
+1. **수신 전용 안내** — 발신번호는 수신 전용이라 **답장이 불가**하다는 문장.
+2. **문의처 안내** — **SKALA 운영진** 또는 **khdev07@naver.com**.
+
+문구에 박아 넣지 말고 `imlate.notification.contact-name` / `contact-email` 설정값을 읽어 렌더한다.
+(대사·통계 문구는 사감에게 노출하지 않는다 — API.md §0 "노출 원칙" 참고)
 
 ### 6.3 발송 이력 엔티티
 
@@ -643,7 +673,7 @@ public interface DailyStatRepository extends JpaRepository<DailyStat, LocalDate>
 }
 ```
 `StatsSnapshotScheduler` : `imlate.stats.snapshot-cron`(기본 `0 5 0 * * *`) 에 전날 Redis 값을 `daily_stat` 로 영속화.
-추가로 22:10 발송 직후 상태를 반영하기 위해 `0 55 23 * * *` 에 당일분도 upsert.
+추가로 21:50 발송 직후 상태를 반영하기 위해 `0 55 23 * * *` 에 당일분도 upsert.
 
 ### 7.3 API
 
@@ -663,7 +693,7 @@ GET /api/v1/stats/daily?from=&to=&token=                   → List<DailyStatVie
 교육생 약 200명은 **기숙사 공용 와이파이**로 등록한다. NAT 뒤라 **전원이 공인 IP 하나를 공유**한다.
 그런데 초기 구현은 버킷을 `imlate:rl:{scope}:{clientIp}` 로만 만들고 등록 한도를 **IP당 8회/분**으로 두었다.
 
-> 결과: 같은 와이파이에서 **9번째 학생부터 429**. 22:00 마감 직전 몰리는 시간대에
+> 결과: 같은 와이파이에서 **9번째 학생부터 429**. 마감(21:45) 직전 몰리는 시간대에
 > 정확히 최악의 타이밍으로 정상 사용자가 차단된다. **운영이 불가능한 결함이었다.**
 
 부하 테스트가 이걸 잡지 못한 이유도 함께 기록해 둔다 — 요청마다 다른 `X-Forwarded-For` 를 붙여
@@ -732,7 +762,7 @@ bucketKey  = "imlate:rl:register-person:" + personHash
   더 강한 보장이 필요해지면 `imlate.lookup.token-secret` 을 키로 쓰는 HMAC-SHA256 으로 바꾼다
   (키 포맷만 바뀌고 로직은 그대로다).
 - 개인 버킷 차단은 **WAL append(§5.2 3단계)보다 반드시 앞에서** 일어나야 한다.
-  차단된 요청이 WAL 에 남으면 22:10 대사가 유령 인원을 DB 로 복구한다.
+  차단된 요청이 WAL 에 남으면 21:50 대사가 유령 인원을 DB 로 복구한다.
 - 본문에서 개인 키를 못 만들면(본문 없음·JSON 파손·필드 누락) **개인 버킷 검사를 건너뛴다.**
   리미터가 정상 등록을 막는 것보다 낫고, 잘못된 본문은 어차피 컨트롤러 `@Valid` 에서 400 이 된다.
 

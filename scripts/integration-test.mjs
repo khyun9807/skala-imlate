@@ -120,22 +120,64 @@ const redisDelPattern = (pattern) => {
  * 기동 중인 앱의 **실제 설정값**을 읽는다(local 프로파일이 /actuator/env 를 열어 둔다).
  * 여러 이름을 주면 순서대로 시도하고 처음 찾은 값을 돌려준다. 못 읽으면 null.
  *
- * rate limit 한도를 스크립트에 하드코딩하지 않기 위한 장치다.
- * (예전에는 "8" 이 박혀 있어서, 한도를 고쳐도 테스트가 같이 거짓말을 했다)
+ * 한도·시각을 스크립트에 하드코딩하지 않기 위한 장치다.
+ * (예전에는 rate limit 한도 "8" 이 박혀 있어서, 한도를 고쳐도 테스트가 같이 거짓말을 했다)
  */
-async function envNumber(...names) {
+async function envValue(...names) {
   for (const name of names) {
     try {
       const res = await fetch(`${BASE}/actuator/env/${encodeURIComponent(name)}`)
       if (!res.ok) continue
       const json = await res.json()
-      const n = Number(json?.property?.value)
-      if (Number.isFinite(n) && n > 0) return n
+      const v = json?.property?.value
+      if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim()
     } catch {
       /* actuator 가 닫혀 있으면 null 로 처리하고 동작 검증에 맡긴다 */
     }
   }
   return null
+}
+
+async function envNumber(...names) {
+  const v = await envValue(...names)
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+// ── 시각 헬퍼 ────────────────────────────────────────────────────────────────
+//
+// 마감·발송 시각은 **전부 설정값**이고 운영자 요청으로 언제든 앞당겨질 수 있다
+// (실제로 22:00/22:10 → 21:45/21:50 으로 앞당겨졌다).
+// 그래서 이 스크립트는 시각을 하드코딩하지 않고, 응답·설정에서 읽어 **관계**만 단언한다.
+
+/** "21:45" · "21:45:00" · "2026-08-05T21:45:00+09:00" 에서 하루 중 분(minute of day)을 뽑는다. */
+const timeToMinutes = (value) => {
+  const m = /(?:^|T)(\d{1,2}):(\d{2})/.exec(String(value ?? ''))
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null
+}
+
+/** 분(minute of day) → "HH:mm". 로그용. */
+const hhmm = (min) =>
+  min === null || min === undefined
+    ? '?'
+    : `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
+
+/**
+ * 6필드 cron("초 분 시 일 월 요일")의 발화 시각을 분 단위 배열로 돌려준다.
+ *   "0 50 21 * * *"   → [21*60+50]
+ *   "0 5,20 22 * * *" → [22*60+5, 22*60+20]
+ * 와일드카드나 스텝이 섞인 시험용 cron(예: 매 분 발화)이면 null 을 돌려 단언을 건너뛴다.
+ */
+const cronToMinutes = (cron) => {
+  const f = String(cron ?? '').trim().split(/\s+/)
+  if (f.length !== 6) return null
+  const numbers = (field) => (/^\d+(,\d+)*$/.test(field) ? field.split(',').map(Number) : null)
+  const minutes = numbers(f[1])
+  const hours = numbers(f[2])
+  if (!minutes || !hours) return null
+  const out = []
+  for (const h of hours) for (const m of minutes) out.push(h * 60 + m)
+  return out.sort((a, b) => a - b)
 }
 
 /**
@@ -283,10 +325,72 @@ async function run() {
   check('마감까지 남은 초가 양수', (win?.secondsUntilClose ?? 0) > 0, String(win?.secondsUntilClose))
   check('서버 시간이 KST(+09:00)', /\+09:00$/.test(String(win?.serverTime)), String(win?.serverTime))
   const TODAY = win.date
-  info(`대상일 = ${TODAY}, 마감 = ${win.closesAt}`)
+
+  // 1-1) 하루 타임라인의 **순서**를 단언한다. 시각 값 자체는 설정이므로 하드코딩하지 않는다.
+  //      계약은 "00:00 등록 시작 → 마감 → 사감 발송 → (재시도) → 통금 22:30 → 일괄 개방 23:30" 이다.
+  //      운영자 요청으로 마감/발송만 앞당겨졌고(22:00/22:10 → 21:45/21:50),
+  //      통금·복귀는 그대로다. 그래서 값이 아니라 순서를 지킨다.
+  const opensAtMin = timeToMinutes(win?.opensAt)
+  const closesAtMin = timeToMinutes(win?.closesAt)
+  const curfewMin = timeToMinutes(win?.curfewTime)
+  const returnMin = timeToMinutes(win?.returnTime)
+  info(`대상일 = ${TODAY} · 등록 창 ${hhmm(opensAtMin)} ~ ${hhmm(closesAtMin)}`
+    + ` · 통금 ${hhmm(curfewMin)} · 일괄 복귀 ${hhmm(returnMin)}`)
+
+  check('등록 시작 < 등록 마감', opensAtMin !== null && closesAtMin !== null && opensAtMin < closesAtMin,
+    `opensAt=${hhmm(opensAtMin)} closesAt=${hhmm(closesAtMin)}`)
+  check('통금 < 일괄 복귀', curfewMin !== null && returnMin !== null && curfewMin < returnMin,
+    `curfew=${hhmm(curfewMin)} return=${hhmm(returnMin)}`)
+
+  // 1-2) 마감 시각이 **설정값 그대로** 응답에 반영되는지(= 어딘가에 하드코딩되지 않았는지).
+  const closeTimeProp = await envValue('imlate.registration.close-time')
+  if (closeTimeProp === null) {
+    info('※ /actuator/env 를 읽지 못해 시각 설정 검사는 건너뜁니다(local 프로파일인지 확인하세요).')
+  } else {
+    check(`window.closesAt(${hhmm(closesAtMin)}) = 설정값 close-time(${closeTimeProp})`,
+      timeToMinutes(closeTimeProp) === closesAtMin,
+      '응답이 설정을 따르지 않으면 마감 시각이 코드에 박혀 있다는 뜻이다.')
+  }
+
+  // 1-3) "마감 → 발송 → 재시도" 가 전부 통금 전에 끝나는지.
+  //      요청을 한 건도 보내지 않고 잡을 수 있는 결함이라 여기서 먼저 본다.
+  //
+  //      단, 밤늦게 시험할 때는 등록 창을 열어 두려고 IMLATE_REGISTRATION_CLOSE_TIME=23:59 를
+  //      쓰라고 안내하고 있다(LOCAL-TESTING §8.5). 그 상태에서는 순서가 당연히 깨지므로
+  //      실패가 아니라 **건너뜀**으로 남긴다 — 시험용 설정을 결함으로 보고하면 신호가 죽는다.
+  const dispatchCron = await envValue('imlate.notification.dispatch-cron')
+  const retryCron = await envValue('imlate.notification.retry-cron')
+  const dispatchMins = cronToMinutes(dispatchCron)
+  const retryMins = cronToMinutes(retryCron)
+  const windowStretched = closesAtMin !== null && curfewMin !== null && closesAtMin >= curfewMin
+
+  if (windowStretched) {
+    info(`※ 마감(${hhmm(closesAtMin)})이 통금(${hhmm(curfewMin)})보다 늦습니다 — 시험용으로 등록 창을 늘려 둔 상태로 봅니다.`)
+    skipped.push(`1-3. 시각 정합성(마감 → 발송 → 재시도 → 통금) — 등록 창이 ${hhmm(closesAtMin)} 까지 늘어나 있어 건너뜀.`
+      + ' 기본 설정으로 재기동해 한 번은 확인할 것.')
+  } else if (!dispatchMins) {
+    info(`※ 발송 cron(${dispatchCron ?? '?'})이 고정 시각이 아니라 스케줄 정합성 검사는 건너뜁니다(시험용 cron 으로 보입니다).`)
+    skipped.push(`1-3. 시각 정합성 — 발송 cron 이 시험용(${dispatchCron ?? '?'})이라 건너뜀.`)
+  } else {
+    info(`발송 cron ${dispatchCron} → ${dispatchMins.map(hhmm).join(', ')}`
+      + ` · 재시도 cron ${retryCron ?? '?'} → ${(retryMins ?? []).map(hhmm).join(', ') || '?'}`)
+    check(`등록 마감(${hhmm(closesAtMin)}) < 통금(${hhmm(curfewMin)})`, closesAtMin < curfewMin,
+      '문 잠긴 뒤에 등록을 받으면 의미가 없다.')
+    check(`사감 발송(${dispatchMins.map(hhmm).join(',')})은 등록 마감(${hhmm(closesAtMin)}) 이후`,
+      Math.min(...dispatchMins) > closesAtMin,
+      '마감 전에 보내면 마감 직전 등록분이 명단에서 빠진다.')
+    check(`사감 발송은 통금(${hhmm(curfewMin)}) 이전`, Math.max(...dispatchMins) < curfewMin,
+      '문이 잠긴 뒤에 명단을 받으면 사감님이 쓸 수 없다.')
+    if (retryMins?.length) {
+      check('실패 채널 재시도는 최초 발송 이후', Math.min(...retryMins) > Math.max(...dispatchMins),
+        `retry=${retryMins.map(hhmm).join(',')} dispatch=${dispatchMins.map(hhmm).join(',')}`)
+      check(`실패 채널 재시도가 통금(${hhmm(curfewMin)}) 전에 모두 끝남`, Math.max(...retryMins) < curfewMin,
+        `retry=${retryMins.map(hhmm).join(',')}`)
+    }
+  }
 
   if (!win.open) {
-    console.error('\n등록 창이 닫혀 있어 이후 시험을 진행할 수 없습니다(22:00 이후).')
+    console.error(`\n등록 창이 닫혀 있어 이후 시험을 진행할 수 없습니다(마감 ${hhmm(closesAtMin)} 이후).`)
     console.error('IMLATE_REGISTRATION_CLOSE_TIME=23:59 로 앱을 재기동한 뒤 다시 실행하세요.')
     process.exit(2)
   }
@@ -444,18 +548,74 @@ async function run() {
     walAfterInvalid === 8, `hlen=${walAfterInvalid}`)
 
   // ---------------------------------------------------------------- 5
-  section('5. 멱등성 (중복 등록 방지)')
-  const dup = await register(...STUDENTS[0])
-  check('중복 등록 → 200 + duplicate=true', dup.status === 200 && dup.json?.duplicate === true,
-    `status=${dup.status} ${dup.text.slice(0, 120)}`)
-  check('중복 등록이 행을 늘리지 않음',
+  section('5. 멱등성 — 같은 사람이 몇 번을 다시 눌러도 명단에는 한 번만 (운영자 확인 요청 항목)')
+  info('계약: (registration_date, class_name, student_name, room_number) 유니크 제약 + 선행 조회.')
+  info('     재제출은 새 행을 만들지 않고 200 + duplicate=true 로 돌아온다. 이 동작은 깨지면 안 된다.')
+
+  // 5-0) DB 유니크 제약이 실제로 걸려 있는지부터 본다.
+  //      선행 조회는 경합(같은 사람이 동시에 두 번 제출)에서 새는 순간이 있고, 마지막 방어선은 DB 다.
+  const uniqueIndexes = mysql(
+    `SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX)`
+    + ` FROM information_schema.STATISTICS`
+    + ` WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='return_registration'`
+    + ` AND NON_UNIQUE=0 AND INDEX_NAME<>'PRIMARY' GROUP BY INDEX_NAME`)
+    .split('\n').map((s) => s.trim()).filter(Boolean)
+  check('DB 유니크 제약 (registration_date, class_name, student_name, room_number) 존재',
+    uniqueIndexes.includes('registration_date,class_name,student_name,room_number'),
+    `실제 유니크 인덱스: ${uniqueIndexes.join(' | ') || '없음'}`)
+
+  // 5-1) ★ 같은 사람을 5회 재제출한다. 2번째부터는 전부 200 + duplicate=true 여야 하고,
+  //      DB 행은 정확히 1건, 그것도 **최초에 만들어진 그 행(id 동일)** 이어야 한다.
+  const [DUP_CLASS, DUP_NAME, DUP_ROOM] = STUDENTS[0]   // §2 에서 이미 201 로 등록된 사람
+  const dupWhere = `registration_date='${TODAY}' AND student_name='${DUP_NAME}' AND room_number='${DUP_ROOM}'`
+  const idBefore = mysql(`SELECT id FROM return_registration WHERE ${dupWhere}`)
+  const registeredAtBefore = mysql(`SELECT registered_at FROM return_registration WHERE ${dupWhere}`)
+
+  const REPEAT = 5
+  const dupStatuses = []
+  let dupOk = 0
+  for (let i = 1; i <= REPEAT; i++) {
+    clearRateLimit()   // 개인 버킷에 걸려 429 가 나면 멱등성이 아니라 리미터를 시험하게 된다(§3 에서 이미 검증했다)
+    const res = await register(DUP_CLASS, DUP_NAME, DUP_ROOM)
+    dupStatuses.push(res.status)
+    if (res.status === 200 && res.json?.duplicate === true) dupOk++
+  }
+  check(`★ 같은 사람 ${REPEAT}회 재제출 → 전부 200 + duplicate=true`, dupOk === REPEAT,
+    `statuses=[${dupStatuses.join(', ')}] (201 이 섞이면 새 행이 생겼다는 뜻)`)
+
+  const dupRows = Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE ${dupWhere}`))
+  check(`★ ${REPEAT}회 재제출 후에도 그 사람의 DB 행은 정확히 1건`, dupRows === 1, `rows=${dupRows}`)
+
+  const idAfter = mysql(`SELECT id FROM return_registration WHERE ${dupWhere}`)
+  check('★ 새 행이 만들어지지 않았다 (id 불변)', !!idBefore && idAfter === idBefore,
+    `before=${idBefore || '없음'} after=${idAfter || '없음'}`)
+  check('최초 등록 시각이 덮어써지지 않았다 (registered_at 불변)',
+    !!registeredAtBefore && mysql(`SELECT registered_at FROM return_registration WHERE ${dupWhere}`) === registeredAtBefore,
+    `before=${registeredAtBefore}`)
+  check('전체 등록 건수도 그대로 8건',
     Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE registration_date='${TODAY}'`)) === 8)
   clearRateLimit()
 
-  // 공백 정규화도 같은 사람으로 취급되는지
-  const normalized = await register(' 1반 ', '김하늘', '301')
+  // 5-2) 공백 정규화도 같은 사람으로 취급되는지
+  const normalized = await register(` ${DUP_CLASS} `, DUP_NAME, DUP_ROOM)
   check('앞뒤 공백은 정규화되어 같은 사람으로 인식', normalized.json?.duplicate === true,
     JSON.stringify(normalized.json))
+  check('공백만 다른 재제출도 행을 늘리지 않음',
+    Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE registration_date='${TODAY}'`)) === 8)
+  clearRateLimit()
+
+  // 5-3) 같은 사람이 **동시에** 5번 제출해도(브라우저 연타·네트워크 재시도) 행은 1건이어야 한다.
+  //      선행 조회만으로는 새는 구간이며, 여기서 유니크 제약이 실제로 일하는지 드러난다.
+  const CONCURRENT = 5
+  const raceStatuses = (await Promise.all(
+    Array.from({ length: CONCURRENT }, () => register(DUP_CLASS, DUP_NAME, DUP_ROOM))
+  )).map((r) => r.status)
+  check(`★ 동시 재제출 ${CONCURRENT}건에도 DB 행 1건 유지`,
+    Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE ${dupWhere}`)) === 1,
+    `statuses=[${raceStatuses.join(', ')}]`)
+  check('동시 재제출이 500 을 내지 않는다 (유니크 위반을 멱등 응답으로 흡수)',
+    raceStatuses.every((s) => s === 200 || s === 201 || s === 429),
+    `statuses=[${raceStatuses.join(', ')}]`)
   clearRateLimit()
 
   // 나머지 등록
@@ -572,6 +732,26 @@ async function run() {
   check('이메일에 통계 섹션 없음', !/\[통계\]|방문자/.test(mailText))
   check('이메일 HTML 에 UTF-8 명시', /utf-8/i.test(mailHtml))
   check('한글이 깨지지 않음(치환문자 없음)', !/�/.test(sms + mailText + mailHtml))
+
+  // 10-2) ★ 운영자 요청 문구 — 수신 전용(답장 불가) 안내 + 문의처.
+  //       사감님이 문자에 답장해도 아무도 읽지 않으므로, 두 채널 모두에 반드시 들어가야 한다.
+  //       문의처는 설정값(imlate.notification.contact-*)이므로 여기서도 하드코딩하지 않고 읽어서 비교한다.
+  const contactEmail = (await envValue('imlate.notification.contact-email')) ?? 'khdev07@naver.com'
+  const contactName = (await envValue('imlate.notification.contact-name')) ?? 'SKALA 운영진'
+  const noReplyNotice = /수신\s*전용|발신\s*전용|답장|회신/
+  info(`문의처 설정: ${contactName} / ${contactEmail}`)
+
+  check('★ 문자에 수신 전용(답장 불가) 안내', noReplyNotice.test(sms),
+    '발신번호가 수신 전용이라 답장이 불가하다는 문구가 없다.')
+  check(`★ 문자에 문의처 이메일(${contactEmail})`, sms.includes(contactEmail), sms.slice(-200))
+  check(`★ 문자에 문의처 이름(${contactName})`, sms.includes(contactName), sms.slice(-200))
+
+  check('★ 이메일 본문에 수신 전용(답장 불가) 안내', noReplyNotice.test(mailText),
+    mailText.slice(-300))
+  check(`★ 이메일 본문에 문의처 이메일(${contactEmail})`, mailText.includes(contactEmail), mailText.slice(-300))
+  check(`★ 이메일 본문에 문의처 이름(${contactName})`, mailText.includes(contactName), mailText.slice(-300))
+  check('★ 이메일 HTML 에도 수신 전용 안내 + 문의처', noReplyNotice.test(mailHtml) && mailHtml.includes(contactEmail),
+    '텍스트 파트에만 넣고 HTML 파트를 빠뜨리는 실수가 잦다.')
 
   const urlMatch = (sms + '\n' + mailText).match(/https?:\/\/[^\s"'<>]+lookup\?date=[^\s"'<>]+/)
   const token = urlMatch ? new URL(urlMatch[0]).searchParams.get('token') : null
@@ -702,7 +882,7 @@ async function run() {
     // ★ 이번 변경의 핵심 증거 ★
     // WAL append 가 중복 선행 조회(DB READ)보다 앞에 있으므로, DB 가 완전히 죽어 500 이 나더라도
     // "이 사람이 등록하려 했다"는 사실은 Redis WAL 에 PENDING 으로 남는다.
-    // 예전 순서(선행 조회 → WAL)에서는 여기서 아무 흔적도 남지 않아 22:10 대사로도 복구할 수 없었다.
+    // 예전 순서(선행 조회 → WAL)에서는 여기서 아무 흔적도 남지 않아 21:50 대사로도 복구할 수 없었다.
     const walDuringDbOutage = walEntries(TODAY)
     const pendingDown = walDuringDbOutage.find(
       (e) => e.studentName === DOWN_NAME && e.roomNumber === DOWN_ROOM)
@@ -749,7 +929,7 @@ async function run() {
     check('장애 중 등록분은 아직 DB 에 없다 (WAL 에만 존재)',
       Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE student_name='${DOWN_NAME}'`)) === 0)
 
-    // 22:10 대사가 WAL PENDING 을 주워 DB 로 복구해야 한다.
+    // 21:50 대사가 WAL PENDING 을 주워 DB 로 복구해야 한다.
     const dbRecovered = await admin(`/admin/notifications/dispatch?date=${TODAY}&force=true`)
     check('대사 포함 발송 200', dbRecovered.status === 200,
       `status=${dbRecovered.status} ${dbRecovered.text.slice(0, 160)}`)
@@ -781,7 +961,7 @@ async function run() {
     check('PENDING 복구는 등록 통계에 1 증가로 반영됨', statsAfterDown === statsBeforeDown + 1,
       `before=${statsBeforeDown} after=${statsAfterDown}`)
 
-    info('※ DB 가 완전히 죽어도 등록 의도가 WAL 에 남아 22:10 대사에서 복구됩니다.')
+    info('※ DB 가 완전히 죽어도 등록 의도가 WAL 에 남아 21:50 대사에서 복구됩니다.')
     info('   사용자에게는 여전히 500 이 나가므로 재시도를 안내하지만, 재시도해도 personKey 멱등이라 중복 행은 생기지 않습니다.')
   } else {
     skipped.push('14·15. 장애 훈련 — Redis / MySQL 정지 (--drills 로 실행)')

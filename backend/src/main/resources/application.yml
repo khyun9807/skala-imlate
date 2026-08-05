@@ -134,10 +134,18 @@ logging:
 imlate:
   timezone: "${IMLATE_TIMEZONE:Asia/Seoul}"
 
-  # 등록 창: [open-time, close-time) — 22:00 정각부터 등록 거부
+  # 등록 창: [open-time, close-time) — 21:45 정각부터 등록 거부
+  #
+  # 하루 타임라인(이 값들의 근거):
+  #   00:00 등록 시작 → 21:45 등록 마감 → 21:50 사감 발송(+5분) → 22:30 통금(문 잠김)
+  #   → 23:30 일괄 개방
+  #   · 마감(21:45)과 발송(21:50) 사이 5분은 마감 직전 등록분이 DB 에 안착하고
+  #     WAL↔DB 대사가 끝나는 데 쓴다. 명단이 빠지면 교육생이 밖에서 밤을 새운다.
+  #   · 21:45 이후에는 그날 등록이 닫히고, 자정(00:00)에 다음 날 대상 등록이 열린다.
+  #   · 마감만 앞당겼고 통금(22:30)·일괄 개방(23:30)은 그대로다(안내 문구용 값).
   registration:
     open-time: "00:00"
-    close-time: "${IMLATE_REGISTRATION_CLOSE_TIME:22:00}"
+    close-time: "${IMLATE_REGISTRATION_CLOSE_TIME:21:45}"
     return-time: "${IMLATE_REGISTRATION_RETURN_TIME:23:30}"
     curfew-time: "${IMLATE_REGISTRATION_CURFEW_TIME:22:30}"
     max-name-length: 20
@@ -164,13 +172,24 @@ imlate:
       - "${IMLATE_WEB_ALLOWED_ORIGIN_1:http://localhost:5173}"
       - "${IMLATE_WEB_ALLOWED_ORIGIN_2:http://localhost:4173}"
 
-  # 사감 발송 (R3, R9) — 22:10 발송, 실패분 22:25/22:40 재시도
+  # 사감 발송 (R3, R9) — 21:50 발송, 실패분 22:05/22:20 재시도
+  #
+  #   cron 은 6필드(초 분 시 일 월 요일)다. 5필드로 쓰면 기동 시 바인딩에 실패한다.
+  #   · dispatch 21:50  = 등록 마감(21:45) + 5분. 마감분 안착·대사 완료 후 발송한다.
+  #   · retry   22:05,22:20 = 발송 +15분 / +30분. 둘 다 통금(22:30) 전이라
+  #     사감이 문을 잠그기 전에 명단을 받는다.
+  #     ※ 재시도 두 시각은 반드시 같은 "시"에 두어야 한 식으로 표현된다.
+  #       21:55 와 22:05 를 "0 55,5 21,22 * * *" 로 쓰면 21:05·21:55·22:05·22:55
+  #       네 번(발송 전 포함) 실행되므로 쓰면 안 된다.
   notification:
     enabled: ${IMLATE_NOTIFICATION_ENABLED:true}
-    dispatch-cron: "${IMLATE_NOTIFICATION_DISPATCH_CRON:0 10 22 * * *}"
-    retry-cron: "${IMLATE_NOTIFICATION_RETRY_CRON:0 25,40 22 * * *}"
+    dispatch-cron: "${IMLATE_NOTIFICATION_DISPATCH_CRON:0 50 21 * * *}"
+    retry-cron: "${IMLATE_NOTIFICATION_RETRY_CRON:0 5,20 22 * * *}"
     max-attempts: ${IMLATE_NOTIFICATION_MAX_ATTEMPTS:3}
     lock-ttl-seconds: ${IMLATE_NOTIFICATION_LOCK_TTL_SECONDS:300}
+    # 문자·메일 말미의 문의처 안내. 운영진이 바뀌면 코드 수정 없이 여기(또는 환경변수)만 고친다.
+    contact-name: "${IMLATE_NOTIFICATION_CONTACT_NAME:SKALA 운영진}"
+    contact-email: "${IMLATE_NOTIFICATION_CONTACT_EMAIL:khdev07@naver.com}"
     # 사감 2명. 실제 연락처는 환경변수 또는 application-secret.yml 로 주입한다.
     supervisors:
       - name: "${IMLATE_SUPERVISOR1_NAME:사감A}"
@@ -206,7 +225,7 @@ imlate:
   #
   # 전제: 교육생 전원이 기숙사 공용 와이파이 한 회선을 쓴다 = 서버에서 보면 공인 IP 가 1개다.
   #       그래서 "IP 당 N회" 를 사람 단위 제한으로 쓰면 N+1번째 학생부터 429 가 되고,
-  #       하필 22:00 마감 직전에 정상 사용자가 막힌다(실서비스 불가).
+  #       하필 21:45 마감 직전에 정상 사용자가 막힌다(실서비스 불가).
   #
   # 해결: 버킷 축을 둘로 나눈다.
   #   · IP 축(global/register/lookup) — 한 회선에서의 비정상 폭주(스크립트·DDoS)만 막는 굵은 그물.

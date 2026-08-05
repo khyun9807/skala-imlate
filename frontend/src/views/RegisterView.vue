@@ -5,6 +5,10 @@
  * - 서버 시간 기준 마감 카운트다운 (클라이언트 시계 오차 보정)
  * - 반 / 이름 / 기숙사 호수 입력 + 서버와 동일한 규칙의 클라이언트 검증
  * - 이전 입력값 자동 채움(R6), 최근 3건 datalist 제안, 저장 정보 삭제 버튼
+ *
+ * **화면에 시각을 하드코딩하지 않는다.** 마감·복귀·통금·등록 시작 시각은 전부
+ * `/registrations/window` 응답(`closesAt` / `returnTime` / `curfewTime` / `opensAt`)에서 뽑아 쓰고,
+ * 값을 못 받았으면 그 문구를 아예 보여 주지 않는다(임의의 시각을 단정하지 않는다).
  */
 
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
@@ -17,7 +21,15 @@ import { ApiError, createRegistration } from '../api/client'
 import type { RegistrationResponse } from '../api/types'
 import { useLastInput } from '../composables/useLastInput'
 import { useServerClock } from '../composables/useServerClock'
-import { formatKoreanDate, formatTimeHm, todayIsoLocal } from '../utils/format'
+import {
+  addDaysIso,
+  formatClockTime,
+  formatKoreanDate,
+  formatTimeHm,
+  relativeDayLabel,
+  toDatePart,
+  todayIsoLocal,
+} from '../utils/format'
 
 /** 서버 검증 규칙과 동일한 허용 문자 (SPEC §5.5) */
 const ALLOWED_PATTERN = /^[가-힣A-Za-z0-9 ()\-]{1,20}$/
@@ -46,6 +58,7 @@ const {
   state: windowState,
   errorMessage: windowError,
   secondsUntilClose,
+  serverNowMs,
   targetDate,
   refresh: refreshWindow,
 } = useServerClock()
@@ -74,18 +87,38 @@ const nameFieldRef = ref<InstanceType<typeof FormField> | null>(null)
 const roomFieldRef = ref<InstanceType<typeof FormField> | null>(null)
 const resultRef = ref<InstanceType<typeof ResultCard> | null>(null)
 
-/** 마감 시각 라벨 (`22:00`) */
-const closeTimeLabel = computed(() => {
-  const closesAt = windowInfo.value?.closesAt
-  const matched = closesAt ? /T(\d{2}):(\d{2})/.exec(closesAt) : null
-  return matched ? `${matched[1]}:${matched[2]}` : '22:00'
-})
+/** 마감 시각 라벨 (`21:45`). 서버 `closesAt` 에서 유도한다. */
+const closeTimeLabel = computed(() => formatClockTime(windowInfo.value?.closesAt))
 
 /** 복귀 시각 라벨 (`23:30`) */
-const returnTimeLabel = computed(() => formatTimeHm(windowInfo.value?.returnTime) || '23:30')
+const returnTimeLabel = computed(() => formatTimeHm(windowInfo.value?.returnTime))
 
 /** 통금 시각 라벨 (`22:30`) */
-const curfewTimeLabel = computed(() => formatTimeHm(windowInfo.value?.curfewTime) || '22:30')
+const curfewTimeLabel = computed(() => formatTimeHm(windowInfo.value?.curfewTime))
+
+/**
+ * 다음 등록이 열리는 시각 라벨 (`내일 00:00`).
+ *
+ * 서버가 주는 `opensAt` 은 **오늘분** 등록 시작 시각이라 마감 뒤에는 이미 지나간 값이다.
+ * 그대로 보여 주면 "오늘 00:00부터"가 되어 정반대로 읽히므로,
+ * 서버 기준 현재 시각과 비교해 이미 지났으면 하루를 더해 "내일"로 표기한다.
+ */
+const nextOpenLabel = computed(() => {
+  const info = windowInfo.value
+  if (!info) {
+    return ''
+  }
+  const openTime = formatClockTime(info.opensAt)
+  const openDate = toDatePart(info.opensAt)
+  if (!openTime || !openDate) {
+    return ''
+  }
+  const opensAtMs = Date.parse(info.opensAt)
+  const alreadyPassed = !Number.isFinite(opensAtMs) || opensAtMs <= serverNowMs.value
+  const targetDay = alreadyPassed ? addDaysIso(openDate, 1) : openDate
+  const dayLabel = relativeDayLabel(info.date || openDate, targetDay)
+  return dayLabel ? `${dayLabel} ${openTime}` : openTime
+})
 
 /** 헤더에 표시할 날짜 문구 */
 const dateLabel = computed(() => formatKoreanDate(targetDate.value || todayIsoLocal()))
@@ -104,7 +137,7 @@ const submitLabel = computed(() => {
   if (isClosed.value) {
     return '등록 마감'
   }
-  return `${returnTimeLabel.value} 복귀 등록하기`
+  return returnTimeLabel.value ? `${returnTimeLabel.value} 복귀 등록하기` : '복귀 등록하기'
 })
 
 onMounted(() => {
@@ -117,11 +150,14 @@ onMounted(() => {
   }
 })
 
-// 마감 상태로 바뀌면 안내 문구를 갱신한다.
+// 마감 상태로 바뀌면 화면 낭독기용 안내 문구를 갱신한다.
 watch(isClosed, (closed) => {
-  if (closed) {
-    statusMessage.value = `오늘 등록은 마감되었습니다. (마감 ${closeTimeLabel.value})`
+  if (!closed) {
+    return
   }
+  const closedAt = closeTimeLabel.value ? ` (마감 ${closeTimeLabel.value})` : ''
+  const nextOpen = nextOpenLabel.value ? ` ${nextOpenLabel.value}부터 다시 등록할 수 있습니다.` : ''
+  statusMessage.value = `오늘 밤 복귀 등록은 마감되었습니다.${closedAt}${nextOpen}`
 })
 
 function normalize(value: string): string {
@@ -289,21 +325,49 @@ function clearSavedInput(): void {
     <div class="container stack">
       <AppHeader title="야간 복귀 등록" :subtitle="dateLabel">
         <template #badges>
-          <span class="badge badge--info">{{ returnTimeLabel }} 일괄 복귀</span>
-          <span class="badge badge--neutral">{{ curfewTimeLabel }} 문 잠김</span>
+          <span v-if="returnTimeLabel" class="badge badge--info">{{ returnTimeLabel }} 일괄 복귀</span>
+          <span v-if="curfewTimeLabel" class="badge badge--neutral">{{ curfewTimeLabel }} 문 잠김</span>
         </template>
       </AppHeader>
 
-      <CountdownBadge :state="windowState" :seconds="secondsUntilClose" :close-time="closeTimeLabel" />
+      <CountdownBadge
+        :state="windowState"
+        :seconds="secondsUntilClose"
+        :close-time="closeTimeLabel"
+        :next-open-label="nextOpenLabel"
+      />
 
       <!-- 화면 낭독기용 상태 안내 -->
       <p class="sr-only" role="status" aria-live="polite">{{ statusMessage }}</p>
 
+      <!--
+        등록 가능할 때의 시간 안내.
+        "명단이 언제 전달되는지"는 window 응답에 발송 시각 필드가 없으므로
+        시각을 단정하지 않고 "마감 직후"로만 표현한다. (없는 값을 지어내지 않는다)
+      -->
+      <section v-if="windowState === 'open'" class="card card--flat no-print" aria-labelledby="window-guide-title">
+        <h2 id="window-guide-title" class="card__title">등록 시간 안내</h2>
+        <ul class="notice-list">
+          <li>지금 등록하면 마감 직후 사감 선생님께 명단이 전달됩니다.</li>
+          <li v-if="closeTimeLabel && nextOpenLabel">
+            {{ closeTimeLabel }} 이후에는 오늘 등록이 닫히고, {{ nextOpenLabel }}에 다음 날 밤 복귀 등록이
+            열립니다.
+          </li>
+        </ul>
+      </section>
+
+      <!-- 마감 사실 자체는 바로 위 카운트다운이 이미 크게 말한다. 여기서는 "그래서 이제 어떻게 되는지"만 다룬다. -->
       <section v-if="isClosed" class="alert alert--warn no-print">
-        <span class="alert__title">오늘 등록은 마감되었습니다 ({{ closeTimeLabel }})</span>
-        <span>
-          마감 이후에는 등록할 수 없습니다. 부득이한 사정이 있다면 사감 선생님께 직접 문의해 주세요.
-        </span>
+        <span class="alert__title">마감 이후 안내</span>
+        <ul class="closed-list">
+          <li v-if="nextOpenLabel" class="closed-list__lead">
+            {{ nextOpenLabel }}부터 다음 날 밤 복귀 등록을 받습니다.
+          </li>
+          <li v-if="curfewTimeLabel">
+            {{ curfewTimeLabel }} 이후에는 기숙사 문이 잠기니 그 전에 복귀해 주세요.
+          </li>
+          <li>오늘 등록하지 못했다면 사감 선생님께 직접 문의해 주세요.</li>
+        </ul>
         <span>
           <button type="button" class="btn btn--secondary" @click="refreshWindow()">등록 시간 다시 확인</button>
         </span>
@@ -317,7 +381,7 @@ function clearSavedInput(): void {
         </span>
       </section>
 
-      <ResultCard v-if="result" ref="resultRef" :result="result" />
+      <ResultCard v-if="result" ref="resultRef" :result="result" :curfew-time="curfewTimeLabel" />
 
       <div v-if="result" class="no-print">
         <button type="button" class="btn btn--secondary btn--block" @click="registerAnother">
@@ -397,8 +461,9 @@ function clearSavedInput(): void {
       <section class="card card--flat" aria-labelledby="notice-title">
         <h2 id="notice-title" class="card__title">안내</h2>
         <ul class="notice-list">
-          <li>{{ closeTimeLabel }}까지 등록하면 잠시 뒤 사감 선생님께 명단이 전달됩니다.</li>
-          <li>{{ curfewTimeLabel }} 이후 기숙사 문이 잠기며, {{ returnTimeLabel }}에 일괄 개방됩니다.</li>
+          <li v-if="curfewTimeLabel && returnTimeLabel">
+            {{ curfewTimeLabel }} 이후 기숙사 문이 잠기며, {{ returnTimeLabel }}에 일괄 개방됩니다.
+          </li>
           <li>등록 정보는 사감 선생님 확인 목적으로만 사용됩니다.</li>
         </ul>
       </section>
@@ -441,6 +506,32 @@ function clearSavedInput(): void {
   content: '·';
   position: absolute;
   left: 0.25rem;
+  font-weight: 700;
+}
+
+/* 마감 안내 목록. 색은 .alert--warn 에서 상속받아 톤을 유지한다. */
+.closed-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+}
+
+.closed-list li {
+  position: relative;
+  padding-left: 1rem;
+}
+
+.closed-list li::before {
+  content: '·';
+  position: absolute;
+  left: 0.25rem;
+  font-weight: 700;
+}
+
+/* 가장 궁금해할 "언제 다시 열리는지"를 한 단계 강조한다. */
+.closed-list__lead {
+  font-size: var(--fs-base);
   font-weight: 700;
 }
 </style>

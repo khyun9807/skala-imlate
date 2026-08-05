@@ -26,15 +26,26 @@ aws ssm start-session --target "$INSTANCE_ID" --region "$REGION"
 
 ## 1. 일일 운영 체크리스트
 
+하루 흐름은 이렇습니다(전부 KST, 전부 설정값 — §5.2 로 바꿀 수 있습니다).
+
+```
+00:00 등록 시작 → 21:45 등록 마감 → 21:50 사감 발송 → (22:05 / 22:20 실패분 재시도)
+                → 22:30 출입문 잠김 → 23:30 일괄 개방
+```
+
 | 시각 | 확인 | 방법 |
 |---|---|---|
 | 아침(아무 때나) | 서비스 살아 있는가 | `curl -fsS "$API/actuator/health"` |
-| 21:50 | 등록 창이 열려 있는가, 인원 수가 상식적인가 | `curl -s "$API/api/v1/registrations/window"` / `.../summary` |
-| 22:01 | 마감되었는가 | `summary` 의 `"open": false` 확인 |
-| **22:12** | **발송 성공했는가** | `curl -s "$API/api/v1/admin/notifications?date=$(date +%F)" -H "X-Admin-Key: $ADMIN_KEY"` |
-| 22:12 | 검증 결과가 `CONSISTENT`/`RECOVERED` 인가 | 조회 페이지 배지 또는 발송 메일의 `[검증 결과]` 섹션 |
-| 22:45 | 재시도 후에도 FAILED가 남았는가 | 위 이력 API에서 `status: "FAILED"` 검색 |
+| 21:35 | 등록 창이 열려 있는가 | `curl -s "$API/api/v1/registrations/window"` (`open:true`, `closesAt` 이 21:45 인지) |
+| 21:46 | 마감되었는가 | `summary` 의 `"open": false` 확인 |
+| **21:52** | **발송 성공했는가** | `curl -s "$API/api/v1/admin/notifications?date=$(date +%F)" -H "X-Admin-Key: $ADMIN_KEY"` |
+| 21:52 | 대사 결과가 `CONSISTENT`/`RECOVERED` 인가 | `curl -s "$API/api/v1/admin/reconciliation" -H "X-Admin-Key: $ADMIN_KEY"` |
+| 22:25 | 재시도 후에도 FAILED가 남았는가 | 위 이력 API에서 `status: "FAILED"` 검색 |
+| 22:30 전 | 사감님이 명단을 받았는가 | 문 잠기기 전에 확인. 못 받았다면 §3.3 강제 재발송 |
 | 다음날 | 통계 스냅샷이 저장되었는가 | `SELECT * FROM daily_stat ORDER BY stat_date DESC LIMIT 5;` |
+
+> 마감(21:45)과 통금(22:30) 사이 45분이 "명단을 받아 확인하는 시간"입니다.
+> 발송이 실패해도 재시도 2회(22:05 / 22:20)가 통금 전에 끝나도록 배치되어 있습니다.
 
 한 줄 점검 스크립트:
 
@@ -69,14 +80,21 @@ curl -s "$API/api/v1/admin/notifications?date=$TODAY" -H "X-Admin-Key: $ADMIN_KE
   강도윤 401 / 남궁민수 402 / ...
 
 ※ 22:30 이후 문은 잠기며 23:30에 일괄 개방됩니다.
-검증: DB 12 / WAL 12 (일치)
-통계: 오늘 방문 88명 / 오늘 등록 12건 / 누적 등록 320건
+※ 이 번호는 수신 전용이라 답장을 받을 수 없습니다.
+   문의는 SKALA 운영진 또는 khdev07@naver.com 으로 부탁드립니다.
 전체 명단: https://imlate.example.com/lookup?date=2026-08-05&token=...
 ```
 
+> **수신 전용 안내와 문의처는 문자·메일 양쪽에 반드시 들어갑니다.**
+> 사감님이 문자에 답장해도 아무도 읽지 않기 때문입니다. 문구는 `imlate.notification.contact-name` /
+> `contact-email` 설정값으로 렌더되므로, 담당자가 바뀌면 §5.4 로 값만 바꾸면 됩니다.
+
 > 명단이 길어 본문이 EUC-KR 기준 1,850바이트를 넘으면 **자동으로 요약 모드**로 바뀝니다.
 > 이때는 이름/호수 대신 `· 1반 5명 / 2반 7명` 과 `(명단이 길어 이름/호수는 아래 링크에서 확인해 주세요)` 가 들어갑니다.
-> 200명 규모에서는 요약 모드가 정상 동작입니다.
+> 요약 모드에서도 위 두 안내(수신 전용 · 문의처)는 남습니다. 200명 규모에서는 요약 모드가 정상 동작입니다.
+
+> 대사(검증) 결과와 방문/등록 통계는 **사감님께 보내는 문구에 넣지 않습니다**(API.md §0 노출 원칙).
+> 운영자는 `/api/v1/admin/reconciliation` 과 `/api/v1/stats/**` 로 확인합니다.
 
 ### 2.2 이메일 (Amazon SES / 텍스트 파트)
 
@@ -89,6 +107,7 @@ curl -s "$API/api/v1/admin/notifications?date=$TODAY" -H "X-Admin-Key: $ADMIN_KE
 
  대상일    : 2026년 8월 5일(수)
  총 인원   : 12명
+ 등록 마감 : 21:45 (마감된 명단입니다)
  복귀 시각 : 23:30 (출입문 일괄 개방)
  통금 시각 : 22:30 (이후 출입문 잠김)
 
@@ -101,22 +120,8 @@ curl -s "$API/api/v1/admin/notifications?date=$TODAY" -H "X-Admin-Key: $ADMIN_KE
 [반별 인원]
  1반 5명 / 2반 7명
 
-[검증 결과 - Redis WAL <-> DB 대사]
- 상태      : 일치 (CONSISTENT)
- DB 등록   : 12건
- WAL 기록  : 12건
- 복구 건수 : 0건
- 확인 시각 : 2026-08-05 22:10:00
-
-[통계]
- 오늘 방문자   : 88명
- 오늘 페이지뷰 : 210회
- 오늘 등록     : 12건
- 누적 방문자   : 540명
- 누적 페이지뷰 : 2100회
- 누적 등록     : 320건
-
 [안내]
+ - 등록은 21:45에 마감되었습니다. (이후 등록분은 없습니다)
  - 22:30 이후 기숙사 출입문은 잠깁니다.
  - 위 명단의 교육생은 23:30에 출입문이 일괄 개방될 때 함께 입관합니다.
  - 명단에 없는 교육생은 22:30 이전에 복귀해야 합니다.
@@ -124,6 +129,10 @@ curl -s "$API/api/v1/admin/notifications?date=$TODAY" -H "X-Admin-Key: $ADMIN_KE
 [전체 명단 조회 페이지]
  https://imlate.example.com/lookup?date=2026-08-05&token=...
  (링크에는 열람 토큰이 포함되어 있습니다. 외부에 공유하지 말아 주세요.)
+
+[문의]
+ - 이 메일과 함께 발송된 문자의 발신번호는 수신 전용이라 답장을 받을 수 없습니다.
+ - 문의는 SKALA 운영진 또는 khdev07@naver.com 으로 부탁드립니다.
 
 ============================================================
  본 메일은 기숙사 야간복귀 등록 시스템에서 자동 발송되었습니다.
@@ -183,7 +192,7 @@ curl -s -X POST "$API/api/v1/admin/notifications/dispatch?date=$TODAY&force=true
 ### 3.4 스케줄러가 아예 돌지 않은 것 같을 때
 
 ```bash
-# 로그에서 22:10 실행 흔적 확인
+# 로그에서 21:50 실행 흔적 확인
 sudo grep -E "정기 사감 발송|사감 발송 완료|건너뜀" /var/log/imlate/imlate.log | tail -20
 ```
 
@@ -204,7 +213,8 @@ curl -s -X POST "$API/api/v1/admin/notifications/dispatch?force=true" -H "X-Admi
 
 ## 4. 대사 불일치(MISMATCH) 대응
 
-조회 페이지 배지나 메일의 `[검증 결과]`가 `불일치(MISMATCH)`면 아래 순서로 봅니다.
+`GET /api/v1/admin/reconciliation` 결과가 `MISMATCH` 면 아래 순서로 봅니다.
+(대사 결과는 사감님께 보내는 문구·조회 페이지에 노출하지 않으므로 **운영자만 이 경로로 확인**합니다.)
 
 ### 4.1 어느 쪽에만 있는지 확인
 
@@ -268,31 +278,48 @@ aws ssm send-command --instance-ids "$INSTANCE_ID" --region "$REGION" \
 
 로컬/온프레미스라면 `backend/config/application-secret.yml` 을 고치고 애플리케이션을 재시작합니다.
 
-### 5.2 등록 마감시간 변경 (예: 22:00 → 21:30)
+### 5.2 등록 마감시간 변경 (예: 21:45 → 21:30)
 
 코드 수정 없이 설정만 바꿉니다. 관련 값은 서로 맞물려 있으니 함께 확인하세요.
 
 | 환경변수 | 프로퍼티 | 기본값 | 의미 |
 |---|---|---|---|
-| `IMLATE_REGISTRATION_CLOSE_TIME` | `imlate.registration.close-time` | `22:00` | 이 시각 **정각부터** 등록 거부 |
-| `IMLATE_NOTIFICATION_DISPATCH_CRON` | `imlate.notification.dispatch-cron` | `0 10 22 * * *` | 발송 시각(마감 + 10분 권장) |
-| `IMLATE_NOTIFICATION_RETRY_CRON` | `imlate.notification.retry-cron` | `0 25,40 22 * * *` | 실패 재시도 |
-| `IMLATE_REGISTRATION_CURFEW_TIME` | `imlate.registration.curfew-time` | `22:30` | 문 잠김(안내 문구용) |
-| `IMLATE_REGISTRATION_RETURN_TIME` | `imlate.registration.return-time` | `23:30` | 일괄 개방(안내 문구용) |
-| — | `imlate.registration.open-time` | `00:00` | 등록 시작(환경변수 미노출, yml 직접 수정) |
+| `IMLATE_REGISTRATION_CLOSE_TIME` | `imlate.registration.close-time` | **`21:45`** | 이 시각 **정각부터** 등록 거부 |
+| `IMLATE_NOTIFICATION_DISPATCH_CRON` | `imlate.notification.dispatch-cron` | **`0 50 21 * * *`** | 발송 시각(= 21:50, 마감 + 5분) |
+| `IMLATE_NOTIFICATION_RETRY_CRON` | `imlate.notification.retry-cron` | **`0 5,20 22 * * *`** | 실패 재시도(= 22:05 / 22:20) |
+| `IMLATE_REGISTRATION_CURFEW_TIME` | `imlate.registration.curfew-time` | `22:30` | 문 잠김(안내 문구용) — **변경 없음** |
+| `IMLATE_REGISTRATION_RETURN_TIME` | `imlate.registration.return-time` | `23:30` | 일괄 개방(안내 문구용) — **변경 없음** |
+| — | `imlate.registration.open-time` | `00:00` | 등록 시작(환경변수 미노출, yml 직접 수정) — **변경 없음** |
+
+> **이력:** 원래는 마감 22:00 / 발송 22:10 / 재시도 22:25·22:40 이었으나,
+> 운영자 요청으로 **마감 21:45 / 발송 21:50 / 재시도 22:05·22:20** 으로 앞당겼습니다.
+> 통금(22:30)과 일괄 개방(23:30), 등록 시작(00:00)은 그대로입니다.
+
+**지켜야 할 순서:** `등록 시작(00:00) < 마감 < 발송 < 재시도 < 통금(22:30) < 일괄 개방(23:30)`
+발송이 통금을 넘어가면 사감님이 문을 잠근 뒤에 명단을 받게 되므로 의미가 없습니다.
 
 ```bash
 aws ssm put-parameter --name "/imlate/prod/IMLATE_REGISTRATION_CLOSE_TIME" \
   --value '21:30' --type SecureString --overwrite --region "$REGION"
 aws ssm put-parameter --name "/imlate/prod/IMLATE_NOTIFICATION_DISPATCH_CRON" \
-  --value '0 40 21 * * *' --type SecureString --overwrite --region "$REGION"
+  --value '0 35 21 * * *' --type SecureString --overwrite --region "$REGION"
+# 재시도(22:05 / 22:20)는 여전히 "발송 이후 · 통금 이전" 이므로 그대로 두어도 됩니다.
+# 바꾼다면 cron 한 줄에 여러 시각을 넣을 때 시·분이 곱해진다는 점에 주의하세요.
+#   '0 5,20 22 * * *'    → 22:05, 22:20        (의도한 값)
+#   '0 50 21,22 * * *'   → 21:50, 22:50        (22:50 은 통금 이후 — 잘못된 예)
 # 재기동 (5.1 의 send-command)
 ```
 
 > 주의: cron은 6필드(`초 분 시 일 월 요일`)이며 `zone`은 `imlate.timezone`(Asia/Seoul)이 적용됩니다.
-> 마감 시각을 바꾸면 프론트 카운트다운은 서버 `window` 응답을 따라 자동으로 맞춰집니다.
-> 단, 프론트 오류 문구(`REGISTRATION_CLOSED` 폴백 메시지)에 "22:00"이 하드코딩되어 있으므로
-> 서버 메시지가 없을 때만 어긋납니다 — 서버는 항상 실제 마감 시각으로 메시지를 만듭니다.
+> 마감 시각을 바꾸면 프론트 카운트다운·안내 문구는 서버 `window` 응답(`closesAt`)을 따라 자동으로 맞춰지고,
+> `REGISTRATION_CLOSED` 메시지도 서버가 실제 마감 시각으로 만들어 내려보냅니다.
+> **프론트·문구·스크립트 어디에도 시각을 하드코딩하지 않는 것이 원칙입니다.**
+
+바꾼 뒤에는 실제 반영을 눈으로 확인합니다.
+
+```bash
+curl -s "$API/api/v1/registrations/window" | python3 -m json.tool   # closesAt 확인
+```
 
 ### 5.3 사감 연락처 추가 / 변경
 
@@ -312,7 +339,29 @@ done
   Terraform `modules/ssm` 에 대응 파라미터를 추가해야 합니다(설정 구조상 리스트는 yml에서 확장).
 - 이메일 수신자를 새로 추가할 때는 **SES 검증 상태**를 먼저 확인하세요(샌드박스면 미검증 주소로 못 보냅니다).
 
-### 5.4 발송 일시 중지
+### 5.4 문자·메일 안내 문구 (수신 전용 안내 · 문의처)
+
+사감님께 나가는 문자와 메일에는 **"발신번호는 수신 전용이라 답장이 불가"** 하다는 안내와
+**문의처**가 항상 들어갑니다. 담당자·주소가 바뀌면 아래 두 값만 고치면 문구가 따라 바뀝니다.
+
+| 환경변수 | 프로퍼티 | 기본값 | 의미 |
+|---|---|---|---|
+| `IMLATE_NOTIFICATION_CONTACT_NAME` | `imlate.notification.contact-name` | `SKALA 운영진` | 문의처 이름 |
+| `IMLATE_NOTIFICATION_CONTACT_EMAIL` | `imlate.notification.contact-email` | `khdev07@naver.com` | 문의처 이메일 |
+
+```bash
+aws ssm put-parameter --name "/imlate/prod/IMLATE_NOTIFICATION_CONTACT_EMAIL" \
+  --value 'khdev07@naver.com' --type SecureString --overwrite --region "$REGION"
+# 재기동 (5.1 의 send-command) 후 실제 문구 확인
+curl -s -X POST "$API/api/v1/admin/notifications/preview" -H "X-Admin-Key: $ADMIN_KEY" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['smsBody'])"
+```
+
+- 두 값이 비어 있어도 발송은 되지만 **문의처 줄이 빠지므로** 반드시 채워 두세요.
+- 문자 본문이 길어져 요약 모드로 바뀌어도 이 안내는 유지됩니다(§2.1).
+- 알리고 발신번호 자체를 수신 가능한 번호로 바꿀 계획이라면, 이 문구도 함께 손봐야 합니다.
+
+### 5.5 발송 일시 중지
 
 ```bash
 aws ssm put-parameter --name "/imlate/prod/IMLATE_NOTIFICATION_ENABLED" \
@@ -321,7 +370,7 @@ aws ssm put-parameter --name "/imlate/prod/IMLATE_NOTIFICATION_ENABLED" \
 # 그래도 관리 API 에 force=true 를 주면 강제 발송은 가능합니다.
 ```
 
-### 5.5 rate limit 조정
+### 5.6 rate limit 조정
 
 `imlate.rate-limit.*`(`application.yml`)에서 스코프별 `capacity` / `refill-tokens` / `refill-period-seconds` 를 바꿉니다.
 `enabled=false` 로 끄거나, Redis 장애 시 동작을 `fail-open`(기본 true, 통과) / `false`(429)로 선택할 수 있습니다.
@@ -432,7 +481,7 @@ ALB 헬스체크가 계속 실패하면 대상 그룹 상태와 보안 그룹(�
 
 ### 8.3 MySQL(RDS) 장애
 
-등록이 500으로 실패합니다. 다만 **WAL에는 남아 있으므로** DB 복구 후 22:10 대사(또는 수동 `dispatch?force=true`)에서
+등록이 500으로 실패합니다. 다만 **WAL에는 남아 있으므로** DB 복구 후 21:50 대사(또는 수동 `dispatch?force=true`)에서
 누락분이 자동 복구됩니다.
 
 ```bash
@@ -443,7 +492,7 @@ curl -s -X POST "$API/api/v1/admin/notifications/dispatch?date=$TODAY&force=true
 RDS 상태·커넥션 수·`FreeableMemory` 를 CloudWatch에서 확인하고, 필요하면 Hikari 풀 크기
 (`IMLATE_DB_POOL_MAX`, 운영 기본 20)를 조정합니다.
 
-### 8.4 22:10에 문자/메일이 안 왔다
+### 8.4 21:50에 문자/메일이 안 왔다
 
 ```
 1) 이력 확인:  GET /api/v1/admin/notifications?date=오늘
@@ -481,7 +530,7 @@ sudo grep "rate limit 차단 발생" /var/log/imlate/imlate.log | tail
 
 | 사용자 화면 문구 | 원인 | 확인 |
 |---|---|---|
-| "등록 마감 시간(22:00)이 지났습니다." | 마감 후 | `window` 응답의 `open`, `closesAt` |
+| "등록 마감 시간(21:45)이 지났습니다." | 마감 후(21:45 이후). 다음 날 대상 등록은 자정에 열린다 | `window` 응답의 `open`, `closesAt` |
 | "요청이 너무 많습니다…" | rate limit | 같은 IP(공용 Wi-Fi/NAT)에서 다수 접속인지 확인 |
 | "…한글·영문·숫자와 공백, 괄호, 하이픈만…" | 특수문자 입력 | 정규식 `^[가-힣A-Za-z0-9 ()\-]{1,20}$` |
 | "이미 등록되어 있습니다" | 정상(멱등) | 명단에 있으면 문제 없음 |
@@ -493,6 +542,7 @@ sudo grep "rate limit 차단 발생" /var/log/imlate/imlate.log | tail
 
 - [ ] SES 발송량/바운스율 확인(바운스 5% 초과 시 계정 제재 위험)
 - [ ] 알리고 잔액 및 발신번호 유효성
+- [ ] 문자·메일 문구의 문의처(`imlate.notification.contact-name` / `contact-email`)가 아직 유효한 담당자인지 (§5.4)
 - [ ] `daily_stat` 보존 정리가 도는지(로그: `보존 기간 초과 일별 통계 N건 삭제`)
 - [ ] RDS 자동 백업 보존(기본 7일)·스토리지 여유
 - [ ] ElastiCache 메모리/축출(`Evictions`) 지표

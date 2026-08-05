@@ -28,7 +28,8 @@ const BASE_URL: string = normalizeBase(import.meta.env.VITE_API_BASE ?? '/api/v1
 /** 에러 코드별 기본 사용자 안내 문구. 서버 메시지가 없을 때 사용한다. */
 const FALLBACK_MESSAGES: Record<string, string | undefined> = {
   VALIDATION_FAILED: '입력값을 다시 확인해 주세요.',
-  REGISTRATION_CLOSED: '오늘 등록은 마감되었습니다. (마감 22:00)',
+  // 마감 시각은 설정값이라 프론트에서 단정하지 않는다. 정확한 시각은 화면 상단 등록 시간 안내가 보여 준다.
+  REGISTRATION_CLOSED: '오늘 밤 복귀 등록은 마감되었습니다. 화면 위쪽의 등록 시간 안내를 확인해 주세요.',
   REGISTRATION_NOT_OPEN: '아직 등록 가능한 시간이 아닙니다.',
   UNAUTHORIZED: '인증 정보가 필요합니다.',
   FORBIDDEN: '조회 권한이 없습니다. 링크가 만료되었을 수 있습니다.',

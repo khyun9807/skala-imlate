@@ -47,8 +47,14 @@ public record ImlateProperties(
     /**
      * 등록 창 정책.
      *
+     * <p>하루 타임라인: <b>00:00 등록 시작 → 21:45 등록 마감 → 21:50 사감 발송 →
+     * 22:30 통금(문 잠김) → 23:30 일괄 개방</b>. 마감을 21:45 로 앞당긴 이유는
+     * 발송(21:50) 전에 명단을 확정할 5분을 확보하고, 사감이 통금(22:30) 전에
+     * 명단을 확인할 여유를 두기 위해서다. 21:45 이후에는 그날 등록이 닫히고,
+     * 자정(00:00)에 다음 날 대상 등록이 열린다.
+     *
      * @param openTime      등록 시작 시각(포함, 기본 00:00)
-     * @param closeTime     등록 마감 시각(미포함, 기본 22:00)
+     * @param closeTime     등록 마감 시각(미포함, 기본 21:45)
      * @param returnTime    연장 복귀 시각(기본 23:30) — 안내 문구용
      * @param curfewTime    원래 통금 시각(기본 22:30) — 안내 문구용
      * @param maxNameLength 이름 최대 길이
@@ -58,13 +64,21 @@ public record ImlateProperties(
                                LocalTime returnTime, LocalTime curfewTime,
                                int maxNameLength, int maxRoomLength) {
 
+        /**
+         * 등록 마감 기본 시각(21:45).
+         *
+         * <p>application.yml 의 {@code imlate.registration.close-time} 기본값과 반드시 같아야 한다.
+         * 둘이 어긋나면 "설정을 지운 환경"과 "설정을 둔 환경"의 마감 시각이 달라진다.
+         */
+        public static final LocalTime DEFAULT_CLOSE_TIME = LocalTime.of(21, 45);
+
         public Registration {
             // 값이 없으면 SPEC 기본값으로 보정한다.
             if (openTime == null) {
                 openTime = LocalTime.MIDNIGHT;
             }
             if (closeTime == null) {
-                closeTime = LocalTime.of(22, 0);
+                closeTime = DEFAULT_CLOSE_TIME;
             }
             if (returnTime == null) {
                 returnTime = LocalTime.of(23, 30);

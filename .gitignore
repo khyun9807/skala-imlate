@@ -58,9 +58,20 @@ blob-report/
 !*.tfvars.example
 crash.log
 crash.*.log
-# terraform plan -out 산출물 (민감값 포함 가능)
+# terraform plan -out 산출물.
+# **상태 전체(DB 비밀번호·API 키·연락처)를 평문으로 담는 zip 이다.** 절대 커밋하지 말 것.
+# 파일 이름을 자유롭게 지을 수 있어(-out=아무이름) 확장자 패턴만으로는 못 막는다.
+# infra/terraform 바로 아래의 확장자 없는 산출물을 통째로 무시한다.
 tfplan
+tfdestroy
+tfoidc
 *.tfplan
+*.plan
+plan.out
+infra/terraform/tf*.out
+# 실수 방지: 아래 디렉터리에서 확장자 없는 파일은 계획 산출물로 간주한다.
+infra/terraform/*plan*
+infra/terraform/*destroy*
 override.tf
 override.tf.json
 *_override.tf

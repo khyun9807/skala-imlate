@@ -34,8 +34,9 @@ const hasToken = computed(() => token.value.length > 0)
 const isForbidden = computed(() => errorCode.value === 'FORBIDDEN' || errorCode.value === 'UNAUTHORIZED')
 
 const dateLabel = computed(() => formatKoreanDate(data.value?.date || dateParam.value || todayIsoLocal()))
-const returnTimeLabel = computed(() => formatTimeHm(data.value?.returnTime) || '23:30')
-const curfewTimeLabel = computed(() => formatTimeHm(data.value?.curfewTime) || '22:30')
+// 시각은 서버 응답 값만 쓴다. 못 받았으면 해당 문구를 감춘다(임의의 시각을 단정하지 않는다).
+const returnTimeLabel = computed(() => formatTimeHm(data.value?.returnTime))
+const curfewTimeLabel = computed(() => formatTimeHm(data.value?.curfewTime))
 const generatedAtLabel = computed(() => formatClockTime(data.value?.generatedAt))
 
 const byClass = computed(() => data.value?.byClass ?? [])
@@ -108,7 +109,7 @@ function printPage(): void {
       <AppHeader title="야간 복귀 명단" :subtitle="dateLabel">
         <template #badges>
           <span v-if="data" class="badge badge--info">총 {{ formatNumber(data.totalCount) }}명</span>
-          <span v-if="data" class="badge badge--neutral">{{ returnTimeLabel }} 일괄 복귀</span>
+          <span v-if="data && returnTimeLabel" class="badge badge--neutral">{{ returnTimeLabel }} 일괄 복귀</span>
         </template>
         <template #actions>
           <button v-if="data" type="button" class="btn btn--secondary" @click="load">새로고침</button>
@@ -217,7 +218,9 @@ function printPage(): void {
         <section class="card card--flat">
           <h2 class="card__title">안내</h2>
           <ul class="notice-list">
-            <li>{{ curfewTimeLabel }} 이후 기숙사 문이 잠기며, {{ returnTimeLabel }}에 일괄 개방됩니다.</li>
+            <li v-if="curfewTimeLabel && returnTimeLabel">
+              {{ curfewTimeLabel }} 이후 기숙사 문이 잠기며, {{ returnTimeLabel }}에 일괄 개방됩니다.
+            </li>
             <li v-if="generatedAtLabel">이 명단은 {{ generatedAtLabel }} 기준으로 생성되었습니다.</li>
             <li>명단에는 개인정보가 포함되어 있으니 외부 공유에 주의해 주세요.</li>
           </ul>

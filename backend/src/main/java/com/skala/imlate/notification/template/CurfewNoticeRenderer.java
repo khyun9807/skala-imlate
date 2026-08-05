@@ -10,7 +10,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+
+import com.skala.imlate.common.properties.NotificationProperties;
 
 /**
  * 사감 안내 문구 렌더러(R4, R9).
@@ -19,8 +22,11 @@ import org.springframework.stereotype.Component;
  * 목표로 한다. 한글은 전각이라 폭이 2이므로, 표 정렬은 문자 수가 아니라 <b>표시 폭</b>으로 계산한다.
  *
  * <p>문구에는 사감에게 필요한 것만 담는다: 날짜·총원·반/이름/호수 목록·23:30 일괄 개방 안내·
- * 22:30 문 잠김 안내·조회 페이지 URL. WAL↔DB 대사 결과와 이용 통계는
+ * 22:30 문 잠김 안내·조회 페이지 URL·회신 불가 및 문의처 안내. WAL↔DB 대사 결과와 이용 통계는
  * {@link NoticePayload} 로 계속 전달되지만 <b>문구에는 넣지 않는다</b>(운영 기록은 로그·관리 API 로 남는다).
+ *
+ * <p>문의처(이름·이메일)는 {@code imlate.notification.contact-*} 설정값이다. 운영진이 바뀌어도
+ * 코드를 고치지 않고 설정만 바꾼다.
  */
 @Component
 public class CurfewNoticeRenderer {
@@ -41,6 +47,41 @@ public class CurfewNoticeRenderer {
     private static final Charset EUC_KR = Charset.forName("EUC-KR");
     /** 이 바이트를 넘으면 문자 본문을 "반별 요약" 모드로 바꾼다(LMS 2000바이트 여유분 확보). */
     private static final int SMS_SAFE_BYTES = 1850;
+    /**
+     * 회신 불가 안내(문자용 1줄).
+     *
+     * <p>문자는 길이가 곧 비용이라 한 줄로 끝낸다. 표현을 바꾸려면 이 상수와
+     * {@link #NO_REPLY_EMAIL} 만 고치면 된다.
+     */
+    private static final String NO_REPLY_SMS = "※ 이 번호는 수신 전용이라 답장을 받을 수 없습니다.";
+    /** 회신 불가 안내(이메일용). 이메일은 여백이 있어 문자보다 조금 더 친절하게 쓴다. */
+    private static final String NO_REPLY_EMAIL =
+            "이 메일과 함께 발송된 문자의 발신번호는 수신 전용이라 답장을 받을 수 없습니다.";
+
+    /** 문의처 이름(예: SKALA 운영진). {@code imlate.notification.contact-name}. */
+    private final String contactName;
+    /** 문의처 이메일. {@code imlate.notification.contact-email}. */
+    private final String contactEmail;
+
+    /**
+     * @param properties {@code imlate.notification.*} 설정(문의처 이름·이메일을 읽는다)
+     */
+    @Autowired
+    public CurfewNoticeRenderer(NotificationProperties properties) {
+        this.contactName = properties.contactName();
+        this.contactEmail = properties.contactEmail();
+    }
+
+    /**
+     * 문의처를 기본값(SKALA 운영진 / khdev07@naver.com)으로 쓰는 생성자.
+     *
+     * <p>설정이 필요 없는 호출부(주로 렌더링 단위 테스트)를 위한 편의 생성자다.
+     * 스프링은 {@link Autowired} 가 붙은 위 생성자만 사용한다.
+     */
+    public CurfewNoticeRenderer() {
+        this.contactName = NotificationProperties.DEFAULT_CONTACT_NAME;
+        this.contactEmail = NotificationProperties.DEFAULT_CONTACT_EMAIL;
+    }
 
     // ------------------------------------------------------------------
     // 문자(SMS/LMS)
@@ -98,6 +139,11 @@ public class CurfewNoticeRenderer {
         sb.append('\n');
         sb.append("※ ").append(TIME_HHMM.format(curfewTime)).append(" 이후 문은 잠기며 ")
                 .append(TIME_HHMM.format(returnTime)).append("에 일괄 개방됩니다.\n");
+        // 회신 불가·문의처 안내는 두 줄로 끝낸다(문자는 길이가 곧 비용이다).
+        // 안내(※)를 모아 두고 링크를 마지막에 두어야 사감이 링크를 바로 누를 수 있다.
+        sb.append(NO_REPLY_SMS).append('\n');
+        sb.append("   문의는 ").append(contactName).append(" 또는 ").append(contactEmail)
+                .append(" 으로 부탁드립니다.\n");
         sb.append("전체 명단: ").append(payload.lookupUrl());
         return sb.toString();
     }
@@ -156,6 +202,11 @@ public class CurfewNoticeRenderer {
         sb.append("[전체 명단 조회 페이지]\n");
         sb.append(' ').append(payload.lookupUrl()).append('\n');
         sb.append(" (링크에는 열람 토큰이 포함되어 있습니다. 외부에 공유하지 말아 주세요.)\n\n");
+
+        sb.append("[문의]\n");
+        sb.append(" - ").append(NO_REPLY_EMAIL).append('\n');
+        sb.append(" - 문의는 ").append(contactName).append(" 또는 ").append(contactEmail)
+                .append(" 으로 부탁드립니다.\n\n");
 
         sb.append(line).append('\n');
         sb.append(" 본 메일은 기숙사 야간복귀 등록 시스템에서 자동 발송되었습니다.\n");
@@ -249,6 +300,18 @@ public class CurfewNoticeRenderer {
                 .append("word-break:break-all;\">").append(escape(url)).append("</div>\n");
         sb.append("<div style=\"margin-top:6px;font-size:14px;color:#9ca3af;\">")
                 .append("링크에는 열람 토큰이 포함되어 있습니다. 외부에 공유하지 말아 주세요.</div>\n");
+        sb.append("</div>\n");
+
+        // 회신 불가 + 문의처. 메일 주소는 mailto: 링크로 걸어 바로 보낼 수 있게 한다.
+        sb.append("<div style=\"background:#ffffff;border-radius:12px;padding:16px;margin-top:14px;\">\n");
+        sb.append("<div style=\"font-size:16px;font-weight:700;color:#1f2937;margin-bottom:10px;\">")
+                .append("문의</div>\n");
+        sb.append("<div style=\"font-size:15px;color:#374151;line-height:1.7;\">")
+                .append(escape(NO_REPLY_EMAIL)).append("<br>\n");
+        sb.append("문의는 ").append(escape(contactName)).append(" 또는 ")
+                .append("<a href=\"mailto:").append(escape(contactEmail)).append("\" ")
+                .append("style=\"color:#1f3a93;text-decoration:underline;font-weight:600;\">")
+                .append(escape(contactEmail)).append("</a> 으로 부탁드립니다.</div>\n");
         sb.append("</div>\n");
 
         sb.append("<div style=\"margin-top:16px;font-size:13px;color:#9ca3af;text-align:center;line-height:1.7;\">")

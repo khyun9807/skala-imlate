@@ -1,5 +1,10 @@
 <script setup lang="ts">
-/** 등록 성공 결과 카드. 신규 등록과 중복 등록을 시각적으로 구분한다. */
+/**
+ * 등록 성공 결과 카드. 신규 등록과 중복 등록을 시각적으로 구분한다.
+ *
+ * 시각(복귀·통금)은 전부 서버 값에서 온다. 통금 시각은 등록 응답에 없으므로 부모가
+ * `/registrations/window` 의 `curfewTime` 을 넘겨주며, 없으면 그 문장을 빼고 안내한다.
+ */
 
 import { computed } from 'vue'
 
@@ -8,9 +13,11 @@ import type { RegistrationResponse } from '../api/types'
 
 interface Props {
   result: RegistrationResponse
+  /** 통금(문 잠김) 시각 `22:30`. 서버 등록 창 정보에서 전달받는다. */
+  curfewTime?: string
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { curfewTime: '' })
 
 const isDuplicate = computed(() => props.result.duplicate === true)
 const title = computed(() => (isDuplicate.value ? '이미 등록되어 있습니다' : '등록이 완료되었습니다'))
@@ -19,7 +26,19 @@ const description = computed(() =>
     ? '아래 내용으로 이미 접수되어 있어 새로 등록하지 않았습니다.'
     : '아래 내용으로 접수되었습니다. 화면을 닫아도 됩니다.',
 )
-const returnTimeLabel = computed(() => formatTimeHm(props.result.returnTime) || '23:30')
+const returnTimeLabel = computed(() => formatTimeHm(props.result.returnTime))
+const curfewTimeLabel = computed(() => formatTimeHm(props.curfewTime))
+
+/** 하단 안내 문구. 받은 시각만으로 문장을 만든다. */
+const note = computed(() => {
+  if (curfewTimeLabel.value && returnTimeLabel.value) {
+    return `${curfewTimeLabel.value}에 문이 잠기며 ${returnTimeLabel.value}에 일괄 개방됩니다. 시간에 맞춰 도착해 주세요.`
+  }
+  if (returnTimeLabel.value) {
+    return `${returnTimeLabel.value}에 문이 일괄 개방됩니다. 시간에 맞춰 도착해 주세요.`
+  }
+  return '복귀 시간에 맞춰 도착해 주세요.'
+})
 </script>
 
 <template>
@@ -51,7 +70,7 @@ const returnTimeLabel = computed(() => formatTimeHm(props.result.returnTime) || 
         <dt>기숙사 호수</dt>
         <dd>{{ result.roomNumber }}</dd>
       </div>
-      <div class="result__row">
+      <div v-if="returnTimeLabel" class="result__row">
         <dt>복귀 시각</dt>
         <dd class="result__highlight">{{ returnTimeLabel }}</dd>
       </div>
@@ -65,9 +84,7 @@ const returnTimeLabel = computed(() => formatTimeHm(props.result.returnTime) || 
       </div>
     </dl>
 
-    <p class="result__note">
-      22:30에 문이 잠기며 {{ returnTimeLabel }}에 일괄 개방됩니다. 시간에 맞춰 도착해 주세요.
-    </p>
+    <p class="result__note">{{ note }}</p>
   </section>
 </template>
 

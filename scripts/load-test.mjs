@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * imlate 부하 테스트 — "22:00 마감 직전 몰림" 시뮬레이션
+ * imlate 부하 테스트 — "등록 마감(기본 21:45) 직전 몰림" 시뮬레이션
  *
  *   교육생 약 200명이 마감 직전에 동시에 몰릴 때
  *     · 전원이 정상적으로 등록되는가 (유실 0건)
@@ -39,7 +39,7 @@
  *   §3B  옆자리 사용자     — 도배 차단 중 같은 IP · **다른 사람**       → 201 (막히지 않는다)
  *   §3C  단일 회선 폭주    — 한 IP 에서 global 한도를 넘는 대량 요청    → 429 (IP 버킷 = DDoS 방어)
  *   §4   부하 후 정합성    — WAL ↔ DB
- *   §5   명단 렌더링       — 22:10 발송 준비 비용
+ *   §5   명단 렌더링       — 사감 발송(기본 21:50) 준비 비용
  *
  * 사용법
  *   node scripts/load-test.mjs                          # 기본: 위 시나리오 전부
@@ -119,7 +119,7 @@ imlate 부하 테스트 — 마감 직전 몰림 시뮬레이션
   §3B  옆자리 사용자     도배 차단 중 같은 IP · **다른 사람**      → 201 (막히지 않는다)
   §3C  단일 회선 폭주    한 IP 에서 global 한도 초과               → 429 (IP 버킷 = DDoS 방어)
   §4   부하 후 정합성    WAL ↔ DB
-  §5   명단 렌더링       22:10 발송 준비 비용
+  §5   명단 렌더링       사감 발송(기본 21:50) 준비 비용
 
 옵션
   --base-url <URL>         기본 http://localhost:8080
@@ -725,7 +725,7 @@ async function phaseSharedWifi(date, state) {
     : '출발지 = 앱이 보는 remoteAddr 하나 (XFF 를 신뢰하지 않으므로 자연스럽게 단일 IP)')
   info(`각자 반/이름/호수가 다르므로 개인 버킷은 1명당 1개만 소비한다.`)
   info(`기대: 전원 201 · 429 0건 · DB ${WIFI_STUDENTS}건.`)
-  info('  → 여기서 429 가 나오면 22:00 마감 직전에 정상 교육생이 차단된다는 뜻이다(운영 불가).')
+  info('  → 여기서 429 가 나오면 마감 직전(기본 21:45)에 정상 교육생이 차단된다는 뜻이다(운영 불가).')
   clearRateLimits()
 
   const reg = newMetrics('★[공용WiFi] 등록 POST /api/v1/registrations (단일 IP)')
@@ -976,7 +976,7 @@ function phaseConsistency(date) {
 
 // ── 5. 대량 명단 렌더링 (발송 준비 비용) ─────────────────────────────────────
 async function phasePreview(date, totalRows) {
-  section(`5. 명단 렌더링 — 22:10 발송 준비 비용 측정 (총 ${totalRows}명)`)
+  section(`5. 명단 렌더링 — 사감 발송(기본 21:50) 준비 비용 측정 (총 ${totalRows}명)`)
   const res = await call('POST', `/admin/notifications/preview?date=${date}`, {
     ip: CONTROL_IP,
     headers: { 'X-Admin-Key': ADMIN_KEY },

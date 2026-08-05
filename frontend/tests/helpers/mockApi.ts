@@ -27,8 +27,11 @@ export const TEST_DATE_LABEL = '2026년 8월 5일 (수)'
 /** 조회 페이지 토큰 (실제 서명 검증은 백엔드 몫이므로 형태만 흉내 낸다) */
 export const TEST_TOKEN = 'MTc3MDI5MzYwMA.ZTJlLXRlc3QtdG9rZW4'
 
-/** 등록 마감 시각 라벨 */
-export const CLOSE_TIME_LABEL = '22:00'
+/** 등록 마감 시각 라벨 (운영 요청으로 22:00 → 21:45) */
+export const CLOSE_TIME_LABEL = '21:45'
+
+/** 등록 시작 시각 라벨 (자정) */
+export const OPEN_TIME_LABEL = '00:00'
 
 /** 복귀 시각 라벨 */
 export const RETURN_TIME_LABEL = '23:30'
@@ -36,11 +39,33 @@ export const RETURN_TIME_LABEL = '23:30'
 /** 통금(문 잠김) 시각 라벨 */
 export const CURFEW_TIME_LABEL = '22:30'
 
+/**
+ * 마감 후 화면이 안내해야 하는 "다음 등록 시작" 라벨.
+ *
+ * `opensAt` 은 오늘분(이미 지난 00:00)이므로 화면은 하루를 더해 **내일 00:00** 로 표기해야 한다.
+ * 이번 요구의 핵심이라 상수로 못 박아 둔다.
+ */
+export const NEXT_OPEN_LABEL = `내일 ${OPEN_TIME_LABEL}`
+
+/** 열림 시나리오에서 카운트다운에 보이는 남은 시간 (21:00 → 21:45) */
+export const OPEN_COUNTDOWN_LABEL = '45분 00초'
+
+/** 마감 임박 시나리오에서 카운트다운에 보이는 남은 시간 (21:37 → 21:45) */
+export const CLOSING_SOON_COUNTDOWN_LABEL = '8분 00초'
+
+/** 서버가 409 로 돌려주는 마감 안내 문구 */
+export const REGISTRATION_CLOSED_MESSAGE = `등록 마감 시간(${CLOSE_TIME_LABEL})이 지났습니다.`
+
 /** 토큰이 포함된 조회 페이지 경로 */
 export const LOOKUP_PATH = `/lookup?date=${TEST_DATE}&token=${encodeURIComponent(TEST_TOKEN)}`
 
-/** 등록 창 시나리오 */
-export type WindowScenario = 'open' | 'closed'
+/**
+ * 등록 창 시나리오.
+ * - `open`        평시(남은 시간 45분)
+ * - `closingSoon` 마감 10분 이내(남은 시간 8분) — 임박 강조 검증용
+ * - `closed`      마감 후
+ */
+export type WindowScenario = 'open' | 'closingSoon' | 'closed'
 
 /** `POST /registrations` 응답 시나리오 */
 export type RegisterScenario =
@@ -205,20 +230,30 @@ export async function installApiMocks(page: Page, options: MockOptions = {}): Pr
 
 // ------------------------------------------------------------------ 응답 생성
 
-/** `GET /registrations/window` 응답 본문 */
+/**
+ * `GET /registrations/window` 응답 본문.
+ *
+ * 시나리오마다 `serverTime` 만 옮겨 준다. 프론트가 `serverTime` 으로 시계 오차를 보정하므로
+ * 브라우저 고정 시각(21:00)과 달라도 화면은 서버 기준으로 계산된다.
+ * **발송 시각 필드는 계약에 없다** — 있는 척 넣지 않는다(화면도 시각을 단정하지 않아야 한다).
+ */
 export function windowPayload(scenario: WindowScenario): Record<string, unknown> {
   const base = {
     date: TEST_DATE,
-    opensAt: `${TEST_DATE}T00:00:00+09:00`,
-    closesAt: `${TEST_DATE}T22:00:00+09:00`,
-    returnTime: '23:30',
-    curfewTime: '22:30',
+    opensAt: `${TEST_DATE}T${OPEN_TIME_LABEL}:00+09:00`,
+    closesAt: `${TEST_DATE}T${CLOSE_TIME_LABEL}:00+09:00`,
+    returnTime: RETURN_TIME_LABEL,
+    curfewTime: CURFEW_TIME_LABEL,
   }
   if (scenario === 'closed') {
-    // 서버 시각을 마감 이후로 내려 주면 프론트가 클라이언트 시계와 무관하게 마감으로 판정한다.
-    return { ...base, open: false, serverTime: `${TEST_DATE}T22:30:00+09:00`, secondsUntilClose: 0 }
+    // 마감(21:45)과 통금(22:30) 사이. 프론트가 클라이언트 시계와 무관하게 마감으로 판정한다.
+    return { ...base, open: false, serverTime: `${TEST_DATE}T22:00:00+09:00`, secondsUntilClose: 0 }
   }
-  return { ...base, open: true, serverTime: FIXED_TIME, secondsUntilClose: 3600 }
+  if (scenario === 'closingSoon') {
+    // 21:37 → 마감까지 8분. 화면은 10분 이하를 "마감 임박"으로 강조해야 한다.
+    return { ...base, open: true, serverTime: `${TEST_DATE}T21:37:00+09:00`, secondsUntilClose: 480 }
+  }
+  return { ...base, open: true, serverTime: FIXED_TIME, secondsUntilClose: 2700 }
 }
 
 async function respondRegister(
@@ -237,7 +272,7 @@ async function respondRegister(
         roomNumber: payload.roomNumber,
         registeredAt: `${TEST_DATE}T21:00:00`,
         duplicate: false,
-        returnTime: '23:30',
+        returnTime: RETURN_TIME_LABEL,
       })
       return
     case 'duplicate':
@@ -249,11 +284,11 @@ async function respondRegister(
         roomNumber: payload.roomNumber,
         registeredAt: `${TEST_DATE}T20:11:42`,
         duplicate: true,
-        returnTime: '23:30',
+        returnTime: RETURN_TIME_LABEL,
       })
       return
     case 'closed':
-      await json(route, 409, errorBody('REGISTRATION_CLOSED', '등록 마감 시간(22:00)이 지났습니다.', path))
+      await json(route, 409, errorBody('REGISTRATION_CLOSED', REGISTRATION_CLOSED_MESSAGE, path))
       return
     case 'rateLimited':
       await json(
@@ -299,10 +334,11 @@ async function respondLookup(
   // 새 계약: verification / stats 필드는 응답에 없다.
   await json(route, 200, {
     date: TEST_DATE,
-    generatedAt: `${TEST_DATE}T22:10:00+09:00`,
+    // 사감 발송 시각이 21:50 으로 앞당겨졌다. 명단 생성 시각도 이에 맞춘다.
+    generatedAt: `${TEST_DATE}T21:50:00+09:00`,
     totalCount: items.length,
-    returnTime: '23:30',
-    curfewTime: '22:30',
+    returnTime: RETURN_TIME_LABEL,
+    curfewTime: CURFEW_TIME_LABEL,
     items,
     byClass: summarizeByClass(items),
     byRoom: summarizeByRoom(items),
