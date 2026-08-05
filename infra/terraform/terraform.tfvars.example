@@ -116,8 +116,15 @@ db_allocated_storage     = 20
 db_max_allocated_storage = 100
 db_multi_az              = false
 db_backup_retention_days = 7
-db_deletion_protection   = true
-db_skip_final_snapshot   = false
+
+# ★ 운영에서는 이 두 줄을 절대 뒤집지 말 것.
+#   deletion_protection = false + skip_final_snapshot = true 조합이면
+#   terraform destroy 한 번에 등록/발송 이력이 스냅샷도 없이 사라진다.
+#   (테스트 스택을 빠르게 부수려고 뒤집어 두고 되돌리는 것을 잊는 사고가 흔하다.)
+#   현재 배포된 값 확인:
+#     terraform state show module.rds.aws_db_instance.this | grep -E "deletion_protection|skip_final_snapshot"
+db_deletion_protection = true
+db_skip_final_snapshot = false
 
 # 비워 두면(주석 유지) random_password 로 자동 생성되어 SSM SecureString 에 저장된다.
 # db_password = "<DB_PASSWORD>"
@@ -159,6 +166,8 @@ aligo_user_id = "<ALIGO_USER_ID>"
 aligo_sender  = "<ALIGO_SENDER_PHONE>" # 사전 등록된 발신번호. 예: "0212345678"
 
 # ---------------- 사감 연락처 ----------------
+# 여기 값은 "오늘 야간복귀 명단"을 받는 주소다. 시스템 장애 알림과는 전혀 다른 채널이며,
+# 아래 alert_email 과 절대 같은 용도로 쓰지 않는다.
 supervisor1_name  = "<SUPERVISOR_1_NAME>"
 supervisor1_phone = "<SUPERVISOR_1_PHONE>" # 예: "01012345678"
 supervisor1_email = "<SUPERVISOR_1_EMAIL>"
@@ -166,3 +175,24 @@ supervisor1_email = "<SUPERVISOR_1_EMAIL>"
 supervisor2_name  = "<SUPERVISOR_2_NAME>"
 supervisor2_phone = "<SUPERVISOR_2_PHONE>"
 supervisor2_email = "<SUPERVISOR_2_EMAIL>"
+
+# ---------------- 모니터링 / 알람 ----------------
+# 발송 실패 = 교육생이 기숙사에 못 들어감. "조용한 실패"를 없애기 위한 설정이다.
+# 설계 근거와 한계는 modules/monitoring/README.md 를 볼 것.
+enable_monitoring = true
+
+# ★ 운영자(개발/인프라 담당) 주소. 사감 주소를 넣지 말 것 —
+#   사감이 새벽 3시에 "RDS CPU 80%" 메일을 받게 된다.
+#   비워 두면 모니터링 모듈이 통째로 만들어지지 않는다.
+#   ★ apply 후 이 주소로 온 AWS 확인 메일의 링크를 눌러야 알림이 살아난다.
+alert_email = "" # 예: "ops@example.com"
+
+# 앱이 Imlate/DispatchCompleted 지표를 올리기 시작한 뒤에 true 로 두는 것을 권장한다.
+# (지표가 아직 없으면 알람이 만들어지자마자 ALARM 메일이 한 통 온다.)
+enable_dispatch_heartbeat_alarm = true
+
+# 임계값. 기본값이면 대개 손댈 일이 없다.
+alarm_rds_free_storage_gib = 2  # 여유 스토리지 하한(GiB) — 초기 할당 20 GiB 의 10%
+alarm_rds_cpu_percent      = 80 # 15분 연속 초과 시
+alarm_redis_memory_percent = 80 # 15분 연속 초과 시
+alarm_disk_used_percent    = 85 # EC2 루트 디스크. install_cloudwatch_agent = true 필요

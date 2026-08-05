@@ -124,6 +124,12 @@ locals {
   # ---- EC2 배치 위치 ----
   app_subnet_id = var.public_app ? module.network.public_subnet_ids[0] : module.network.private_subnet_ids[0]
 
+  # ---- 모니터링 ----
+  #   알림 받을 주소가 없으면 알람을 만들 이유가 없다(울려도 아무도 못 듣는다).
+  #   그래서 alert_email 이 비면 모듈 전체를 만들지 않는다.
+  alert_email        = trimspace(var.alert_email)
+  monitoring_enabled = var.enable_monitoring && length(local.alert_email) > 0
+
   # ---- SSM 에 값이 없을 때 쓰는 비민감 기본 환경변수 ----
   default_env = {
     SPRING_PROFILES_ACTIVE          = var.spring_profile
@@ -136,6 +142,10 @@ locals {
     IMLATE_NOTIFICATION_ENABLED     = "true"
     IMLATE_RATE_LIMIT_ENABLED       = "true"
     IMLATE_STATS_ENABLED            = "true"
+    # 하트비트 지표의 Environment 차원 값. 모니터링 알람의 dimensions 와 **반드시 같아야** 한다
+    # (CloudWatch 는 차원이 다르면 다른 지표로 본다). 양쪽 모두 var.environment 에서 나오므로
+    # 여기서 명시적으로 주입해 두 값이 갈라질 여지를 없앤다.
+    IMLATE_ENV = var.environment
     # 아래 두 값은 SSM 파라미터가 없을 수도 있으므로 빈 문자열 기본값이 반드시 필요하다.
     IMLATE_REDIS_PASSWORD        = ""
     IMLATE_SES_CONFIGURATION_SET = ""
@@ -521,6 +531,61 @@ resource "aws_lb_target_group_attachment" "app" {
   target_group_arn = module.alb[0].target_group_arn
   target_id        = module.ec2.instance_id
   port             = var.alb_target_port
+}
+
+# ---------------------------------------------------------------------
+# 모니터링 / 알람 (CloudWatch → SNS → 운영자 메일)
+#
+#   운영 위험 평가에서 나온 1번 위험을 막는다.
+#   "EC2 1대 단일 AZ 구성인데 21:50 직전에 인스턴스가 죽으면 발송이 통째로 실패하고
+#    아무도 모른다." systemd Restart=always 는 프로세스 재시작만 커버한다.
+#
+#   ★ 수신 채널 분리
+#     이 모듈에는 사감 연락처(supervisor*_phone / supervisor*_email)를 **넘기지 않는다.**
+#     사감에게 가는 것은 오늘 야간복귀 명단뿐이고, alert_email 로 가는 것은
+#     "시스템이 고장났다"는 운영자용 신호다. 두 채널이 섞이면 사감이 새벽에
+#     CloudWatch 알람 메일을 받게 된다.
+#
+#   ★ 부작용 금지
+#     알람은 CloudWatch 안에서만 평가된다. 앱의 발송 경로에 아무것도 끼어들지 않으므로
+#     알림 때문에 발송이 느려지거나 실패할 여지가 없다. 앱이 올리는 PutMetricData 만
+#     발송 트랜잭션 밖에서 예외를 삼키고 호출하면 된다(계약은 modules/monitoring/README.md).
+# ---------------------------------------------------------------------
+module "monitoring" {
+  source = "./modules/monitoring"
+  count  = local.monitoring_enabled ? 1 : 0
+
+  name_prefix = local.name_prefix
+  alert_email = local.alert_email
+
+  ec2_instance_id = module.ec2.instance_id
+  rds_identifier  = module.rds.identifier
+
+  # module.elasticache.replication_group_id 가 아니라 같은 문자열을 다시 계산해서 넘긴다.
+  # 복제 그룹 출력은 최초 apply 때 unknown 이고, monitoring 모듈은 이 값으로 노드 이름을
+  # 만들어 for_each 를 돌리기 때문이다(unknown 이면 plan 이 실패한다).
+  redis_replication_group_id = "${local.name_prefix}-redis"
+  redis_num_cache_clusters   = var.redis_num_cache_clusters
+
+  # CloudWatch Agent 를 설치하지 않으면 disk 지표 자체가 없다.
+  enable_disk_alarm = var.install_cloudwatch_agent
+
+  enable_dispatch_heartbeat_alarm = var.enable_dispatch_heartbeat_alarm
+
+  # ★ 앱이 올리는 지표의 차원과 **정확히** 일치해야 한다.
+  #   CloudWatch 는 차원이 다르면 아예 다른 지표로 취급한다. 어긋나면 알람이
+  #   영원히 데이터를 못 찾고(treat_missing_data = breaching) 계속 ALARM 상태가 된다.
+  #   앱 쪽 정의: CloudWatchDispatchHeartbeatPublisher 의 Environment / Kind 차원.
+  #   Kind=DISPATCH 만 감시한다(RETRY 는 실패가 있을 때만 도므로 하트비트가 될 수 없다).
+  dispatch_metric_dimensions = {
+    Environment = var.environment
+    Kind        = "DISPATCH"
+  }
+
+  rds_free_storage_threshold_bytes = var.alarm_rds_free_storage_gib * 1024 * 1024 * 1024
+  rds_cpu_threshold_percent        = var.alarm_rds_cpu_percent
+  redis_memory_threshold_percent   = var.alarm_redis_memory_percent
+  disk_used_percent_threshold      = var.alarm_disk_used_percent
 }
 
 # ---------------------------------------------------------------------

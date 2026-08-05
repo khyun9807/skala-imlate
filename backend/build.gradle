@@ -55,6 +55,9 @@ dependencies {
     implementation platform("software.amazon.awssdk:bom:${awsSdkVersion}")
     implementation 'software.amazon.awssdk:sesv2'
     implementation 'software.amazon.awssdk:sts'
+    // 발송 완료 하트비트를 CloudWatch 지표로 직접 올린다.
+    // (로그 지표 필터 방식은 로그 그룹 소유권 문제가 있고 차원을 붙일 수 없다)
+    implementation 'software.amazon.awssdk:cloudwatch'
 
     // --- misc ---
     implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'

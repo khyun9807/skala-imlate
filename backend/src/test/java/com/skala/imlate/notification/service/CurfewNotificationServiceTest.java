@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -26,6 +27,10 @@ import com.skala.imlate.notification.channel.SendResult;
 import com.skala.imlate.notification.channel.SmsSender;
 import com.skala.imlate.notification.domain.NotificationDispatch;
 import com.skala.imlate.notification.domain.NotificationDispatchRepository;
+import com.skala.imlate.notification.ops.ChannelFailure;
+import com.skala.imlate.notification.ops.DispatchHeartbeat;
+import com.skala.imlate.notification.ops.DispatchHeartbeatPublisher;
+import com.skala.imlate.notification.ops.OpsAlertNotifier;
 import com.skala.imlate.notification.template.CurfewNoticeRenderer;
 import com.skala.imlate.registration.domain.ReturnRegistration;
 import com.skala.imlate.registration.service.ReconciliationService;
@@ -58,6 +63,8 @@ class CurfewNotificationServiceTest {
     private EmailSender emailSender;
     private NotificationDispatchRepository dispatchRepository;
     private DispatchLockManager lockManager;
+    private OpsAlertNotifier opsAlertNotifier;
+    private DispatchHeartbeatPublisher heartbeatPublisher;
 
     @BeforeEach
     void setUp() {
@@ -69,6 +76,8 @@ class CurfewNotificationServiceTest {
         emailSender = mock(EmailSender.class);
         dispatchRepository = mock(NotificationDispatchRepository.class);
         lockManager = mock(DispatchLockManager.class);
+        opsAlertNotifier = mock(OpsAlertNotifier.class);
+        heartbeatPublisher = mock(DispatchHeartbeatPublisher.class);
 
         when(accessTokenService.issue(TestFixtures.DATE)).thenReturn("TKN");
         when(reconciliationService.reconcile(TestFixtures.DATE))
@@ -85,6 +94,7 @@ class CurfewNotificationServiceTest {
         return new CurfewNotificationService(properties, TestFixtures.imlateProperties(),
                 registrationService, reconciliationService, statsQueryService, accessTokenService,
                 new CurfewNoticeRenderer(), smsSender, emailSender, dispatchRepository, lockManager,
+                opsAlertNotifier, heartbeatPublisher,
                 TestFixtures.clockAt(LocalTime.of(22, 10)));
     }
 
@@ -354,5 +364,151 @@ class CurfewNotificationServiceTest {
 
         verifyNoInteractions(smsSender, emailSender, lockManager);
         verify(reconciliationService, never()).reconcile(any());
+        // 미리보기는 발송 시도가 아니므로 하트비트도 알림도 남기지 않는다.
+        verifyNoInteractions(heartbeatPublisher, opsAlertNotifier);
+    }
+
+    // ------------------------------------------------------------------
+    // 운영자 알림 / 하트비트 (위험 2 대응)
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("최종 실패한 채널의 사유가 운영자 알림으로 그대로 전달된다")
+    void 실패_사유가_운영자_알림으로_전달된다() {
+        lockAcquired();
+        when(registrationService.findByDate(TestFixtures.DATE)).thenReturn(threeRegistrations());
+        when(smsSender.send(anyString(), anyString(), anyString()))
+                .thenReturn(SendResult.fail("Aligo 발송 실패(result_code=-101): 인증 오류"));
+        when(emailSender.send(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(SendResult.ok("mail-id"));
+
+        DispatchSummary summary = service(properties(true, 1, SUPERVISOR_A))
+                .dispatch(TestFixtures.DATE, false);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ChannelFailure>> failures = ArgumentCaptor.forClass(List.class);
+        verify(opsAlertNotifier).notifyDispatchResult(eq(summary), failures.capture());
+
+        assertThat(failures.getValue()).hasSize(1);
+        ChannelFailure failure = failures.getValue().get(0);
+        assertThat(failure.channel()).isEqualTo(NotificationDispatch.CHANNEL_SMS);
+        assertThat(failure.recipientName()).isEqualTo("사감A");
+        assertThat(failure.reason()).contains("result_code=-101");
+        // 수신처는 마스킹된 값만 넘긴다(알림 문구와 로그에 그대로 실리기 때문).
+        assertThat(failure.maskedRecipient()).isEqualTo("010****2222");
+    }
+
+    @Test
+    @DisplayName("모두 성공하면 실패 목록이 빈 채로 알림 담당에게 전달된다(보낼지 말지는 알림 담당이 판단)")
+    void 성공하면_빈_실패목록이_전달된다() {
+        lockAcquired();
+        when(registrationService.findByDate(TestFixtures.DATE)).thenReturn(threeRegistrations());
+        when(smsSender.send(anyString(), anyString(), anyString())).thenReturn(SendResult.ok("sms-id"));
+        when(emailSender.send(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(SendResult.ok("mail-id"));
+
+        service(properties(true, 1, SUPERVISOR_A)).dispatch(TestFixtures.DATE, false);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ChannelFailure>> failures = ArgumentCaptor.forClass(List.class);
+        verify(opsAlertNotifier).notifyDispatchResult(any(DispatchSummary.class), failures.capture());
+        assertThat(failures.getValue()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("운영자 알림이 예외를 던져도 발송 결과는 그대로 반환된다(부작용 금지)")
+    void 알림이_실패해도_발송_결과는_그대로다() {
+        lockAcquired();
+        when(registrationService.findByDate(TestFixtures.DATE)).thenReturn(threeRegistrations());
+        when(smsSender.send(anyString(), anyString(), anyString())).thenReturn(SendResult.ok("sms-id"));
+        when(emailSender.send(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(SendResult.ok("mail-id"));
+        doThrow(new IllegalStateException("알림 시스템 장애"))
+                .when(opsAlertNotifier).notifyDispatchResult(any(), any());
+
+        DispatchSummary summary = service(properties(true, 1, SUPERVISOR_A))
+                .dispatch(TestFixtures.DATE, false);
+
+        assertThat(summary.skipped()).isFalse();
+        assertThat(summary.smsSuccess()).isEqualTo(1);
+        assertThat(summary.emailSuccess()).isEqualTo(1);
+        assertThat(summary.allSucceeded()).isTrue();
+    }
+
+    @Test
+    @DisplayName("하트비트가 예외를 던져도 발송 결과가 그대로 반환되고 운영자 알림은 계속 수행된다")
+    void 하트비트가_실패해도_발송_결과는_그대로다() {
+        lockAcquired();
+        when(registrationService.findByDate(TestFixtures.DATE)).thenReturn(threeRegistrations());
+        when(smsSender.send(anyString(), anyString(), anyString())).thenReturn(SendResult.ok("sms-id"));
+        when(emailSender.send(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(SendResult.ok("mail-id"));
+        doThrow(new IllegalStateException("지표 전송 실패"))
+                .when(heartbeatPublisher).publish(any());
+
+        DispatchSummary summary = service(properties(true, 1, SUPERVISOR_A))
+                .dispatch(TestFixtures.DATE, false);
+
+        assertThat(summary.allSucceeded()).isTrue();
+        verify(opsAlertNotifier).notifyDispatchResult(any(DispatchSummary.class), any());
+    }
+
+    @Test
+    @DisplayName("발송했으면 result=SENT 하트비트를 실패 건수와 함께 남긴다")
+    void 발송하면_하트비트를_남긴다() {
+        lockAcquired();
+        when(registrationService.findByDate(TestFixtures.DATE)).thenReturn(threeRegistrations());
+        when(smsSender.send(anyString(), anyString(), anyString())).thenReturn(SendResult.fail("문자 실패"));
+        when(emailSender.send(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(SendResult.ok("mail-id"));
+
+        service(properties(true, 1, SUPERVISOR_A)).dispatch(TestFixtures.DATE, false);
+
+        ArgumentCaptor<DispatchHeartbeat> heartbeat = ArgumentCaptor.forClass(DispatchHeartbeat.class);
+        verify(heartbeatPublisher).publish(heartbeat.capture());
+
+        assertThat(heartbeat.getValue().kind()).isEqualTo(DispatchHeartbeat.Kind.DISPATCH);
+        assertThat(heartbeat.getValue().date()).isEqualTo(TestFixtures.DATE);
+        assertThat(heartbeat.getValue().result()).isEqualTo("SENT");
+        assertThat(heartbeat.getValue().targetCount()).isEqualTo(3);
+        assertThat(heartbeat.getValue().failureCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("건너뛴 경우에도 하트비트는 남긴다 — 21:50 에 아무 신호도 없는 것과 구분되어야 한다")
+    void 건너뛰어도_하트비트는_남긴다() {
+        lockAcquired();
+        when(registrationService.findByDate(TestFixtures.DATE)).thenReturn(List.of());
+
+        service(properties(true, 1, SUPERVISOR_A)).dispatch(TestFixtures.DATE, false);
+
+        ArgumentCaptor<DispatchHeartbeat> heartbeat = ArgumentCaptor.forClass(DispatchHeartbeat.class);
+        verify(heartbeatPublisher).publish(heartbeat.capture());
+
+        assertThat(heartbeat.getValue().result()).isEqualTo("SKIPPED:NO_REGISTRATION");
+        assertThat(heartbeat.getValue().failureCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("발송이 비활성화되어 있어도 하트비트는 남긴다(스케줄러가 살아 있음을 알린다)")
+    void 비활성화_상태에서도_하트비트는_남긴다() {
+        service(properties(false, 1, SUPERVISOR_A)).dispatch(TestFixtures.DATE, false);
+
+        ArgumentCaptor<DispatchHeartbeat> heartbeat = ArgumentCaptor.forClass(DispatchHeartbeat.class);
+        verify(heartbeatPublisher).publish(heartbeat.capture());
+        assertThat(heartbeat.getValue().result()).isEqualTo("SKIPPED:DISABLED");
+    }
+
+    @Test
+    @DisplayName("재시도 실행의 하트비트는 kind=RETRY 로 구분된다")
+    void 재시도_하트비트는_RETRY다() {
+        when(dispatchRepository.findByDispatchDate(TestFixtures.DATE)).thenReturn(List.of());
+
+        service(properties(true, 1, SUPERVISOR_A)).retryFailed(TestFixtures.DATE);
+
+        ArgumentCaptor<DispatchHeartbeat> heartbeat = ArgumentCaptor.forClass(DispatchHeartbeat.class);
+        verify(heartbeatPublisher).publish(heartbeat.capture());
+        assertThat(heartbeat.getValue().kind()).isEqualTo(DispatchHeartbeat.Kind.RETRY);
+        assertThat(heartbeat.getValue().result()).isEqualTo("SKIPPED:NO_FAILURE");
     }
 }

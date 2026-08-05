@@ -279,6 +279,47 @@ output "ses_verification_guide" {
   value       = module.ses.verification_guide
 }
 
+# ---------------- 모니터링 / 알람 ----------------
+output "alert_sns_topic_arn" {
+  description = <<-EOT
+    모든 CloudWatch 알람이 게시되는 SNS 주제 ARN(모니터링 비활성이면 null).
+    수동 테스트: aws sns publish --topic-arn <ARN> --subject test --message test
+  EOT
+  value       = one(module.monitoring[*].sns_topic_arn)
+}
+
+output "alert_subscription_notice" {
+  description = <<-EOT
+    ★ 이메일 구독은 apply 만으로 활성화되지 않는다.
+    AWS 가 alert_email 로 보낸 확인 메일의 "Confirm subscription" 링크를 눌러야
+    PendingConfirmation → Confirmed 로 바뀌고, 그 전에는 알람이 울려도 메일이 오지 않는다.
+  EOT
+  value       = one(module.monitoring[*].alert_subscription_notice)
+}
+
+output "monitoring_alarm_names" {
+  description = "생성된 CloudWatch 알람 이름 목록(모니터링 비활성이면 null)"
+  value       = one(module.monitoring[*].alarm_names)
+}
+
+output "monitoring_alarm_arns" {
+  description = "생성된 CloudWatch 알람 ARN 목록"
+  value       = one(module.monitoring[*].alarm_arns)
+}
+
+output "dispatch_metric_contract" {
+  description = <<-EOT
+    애플리케이션이 지켜야 하는 CloudWatch 커스텀 지표 계약(네임스페이스/이름/차원).
+    앱의 PutMetricData 호출과 이 값이 어긋나면 하트비트 알람이 영원히 데이터를 못 찾는다.
+  EOT
+  value       = one(module.monitoring[*].dispatch_metric_contract)
+}
+
+output "heartbeat_alarm_window" {
+  description = "발송 하트비트 알람의 평가 설계 요약(알람 메일을 받았을 때 해석하는 근거)"
+  value       = one(module.monitoring[*].heartbeat_alarm_window)
+}
+
 # ---------------- 운영 안내 ----------------
 output "next_steps" {
   description = "apply 직후 해야 할 일 요약"
@@ -294,6 +335,7 @@ output "next_steps" {
     "5. 헬스체크: curl -fsSL ${local.resolved_base_url}/healthz",
     local.tls_enabled ? "6. HTTPS: EC2 안의 imlate-tls.timer 가 부팅 3분 뒤부터 1시간 간격으로 인증서를 시도합니다. DNS 전파 후 자동으로 켜집니다. 확인: sudo journalctl -u imlate-tls.service -n 50" : "6. HTTPS 미사용: domain_name 을 지정하면 Let's Encrypt 인증서가 자동 발급됩니다.",
     "7. 시크릿 변경 시: SSM 파라미터 수정 → sudo systemctl restart imlate-env imlate",
+    local.monitoring_enabled ? "8. ★ 알람 구독 확인: ${local.alert_email} 로 온 AWS 확인 메일의 링크를 눌러야 알림이 살아납니다. 누르기 전에는 알람이 울려도 메일이 오지 않습니다. terraform output alert_subscription_notice" : "8. 알람 미설정: alert_email 을 채우면 CloudWatch 알람 + SNS 통보가 만들어집니다(enable_monitoring).",
   ])
 }
 

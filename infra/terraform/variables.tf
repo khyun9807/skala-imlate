@@ -475,13 +475,32 @@ variable "db_backup_retention_days" {
 }
 
 variable "db_deletion_protection" {
-  description = "RDS 삭제 방지"
+  description = <<-EOT
+    RDS 삭제 방지. **운영에서는 반드시 true.**
+
+    이 DB 에는 매일의 야간복귀 등록 이력과 발송 이력이 들어 있고 백업 말고는 원본이 없다.
+    false 로 두면 terraform destroy 나 실수로 만든 -target 한 줄에 통째로 사라진다.
+
+    ※ terraform.tfvars 가 이 값을 덮어쓰면 여기 기본값은 아무 소용이 없다.
+      현재 배포된 값 확인:
+        terraform state show module.rds.aws_db_instance.this | grep deletion_protection
+  EOT
   type        = bool
   default     = true
 }
 
 variable "db_skip_final_snapshot" {
-  description = "삭제 시 최종 스냅샷 생략 여부(운영은 false 권장)"
+  description = <<-EOT
+    삭제 시 최종 스냅샷 생략 여부. **운영에서는 반드시 false.**
+
+    true 면 DB 를 지울 때 스냅샷 없이 그냥 사라진다. 되돌릴 방법이 없다.
+    테스트 환경을 빠르게 만들고 부수려고 true 로 뒤집는 경우가 있는데,
+    운영 스택에서는 절대 그대로 두면 안 된다.
+
+    ※ terraform.tfvars 가 이 값을 덮어쓰면 여기 기본값은 아무 소용이 없다.
+      현재 배포된 값 확인:
+        terraform state show module.rds.aws_db_instance.this | grep skip_final_snapshot
+  EOT
   type        = bool
   default     = false
 }
@@ -689,6 +708,110 @@ variable "supervisor2_email" {
   description = "사감 2 이메일 주소"
   type        = string
   sensitive   = true
+}
+
+# ---------------------------------------------------------------------
+# 모니터링 / 알람
+#
+#   발송 실패 = 교육생이 기숙사에 못 들어감. 그러므로 "조용한 실패"가 최대 위험이다.
+#   여기 변수는 전부 기본값이 있고, alert_email 만 채우면 알람이 살아난다.
+#   상세 설계와 한계는 modules/monitoring/README.md 를 볼 것.
+# ---------------------------------------------------------------------
+variable "enable_monitoring" {
+  description = <<-EOT
+    CloudWatch 알람 + SNS 통보(modules/monitoring) 생성 여부.
+
+    기본 true 지만 alert_email 이 비어 있으면 어차피 아무것도 만들지 않는다.
+    울려도 아무도 듣지 못하는 알람은 만들 이유가 없기 때문이다.
+    (SNS 주제 + 알람은 사실상 무료다. 알람 10개까지 무료, 이후 개당 월 $0.10.)
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "alert_email" {
+  description = <<-EOT
+    운영 알람을 받을 **운영자** 이메일 주소. 비우면 모니터링 모듈을 만들지 않는다.
+
+    ★ 사감 수신 주소(supervisor1_email / supervisor2_email)와는 완전히 다른 채널이다.
+      사감에게 가는 것은 "오늘 야간복귀 명단"뿐이고, 이 주소로 가는 것은
+      "시스템이 고장났다"는 신호다. 여기에 사감 개인 주소를 넣으면 사감이 새벽에
+      RDS CPU 알람 메일을 받게 된다. modules/monitoring 은 사감 변수를 입력으로
+      받지도 않으므로 두 채널은 설정 경로부터 분리되어 있다.
+
+    ★ apply 만으로는 알림이 오지 않는다. AWS 가 이 주소로 보낸 확인 메일의
+      "Confirm subscription" 링크를 눌러야 구독이 활성화된다.
+      terraform output alert_subscription_notice 에 확인 절차가 나온다.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      length(trimspace(var.alert_email)) == 0 ||
+      can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", trimspace(var.alert_email)))
+    )
+    error_message = "alert_email 은 비워 두거나 유효한 이메일 주소여야 합니다."
+  }
+}
+
+variable "enable_dispatch_heartbeat_alarm" {
+  description = <<-EOT
+    발송 하트비트(Imlate/DispatchCompleted) 누락 알람 생성 여부.
+
+    앱이 21:50 발송 배치를 끝내고 올리는 커스텀 지표가 최근 24시간 동안 하나도 없으면
+    ALARM 이 된다(21:55~22:10 KST 판정 → 통금 22:30 전에 알아챈다).
+
+    ★ 앱이 아직 이 지표를 올리지 않는 상태에서 켜면 만들자마자 ALARM 메일이 한 통 온다.
+      앱 배포 전이라면 false 로 두었다가 앱이 올라간 뒤 true 로 바꾸는 편이 깔끔하다.
+      설계 근거와 한계는 modules/monitoring/README.md 의 "하트비트 알람" 절에 있다.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "alarm_rds_free_storage_gib" {
+  description = "RDS 여유 스토리지 하한(GiB). 기본 2 = 초기 할당 20 GiB 의 10%."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.alarm_rds_free_storage_gib > 0
+    error_message = "alarm_rds_free_storage_gib 는 0 보다 커야 합니다."
+  }
+}
+
+variable "alarm_rds_cpu_percent" {
+  description = "RDS CPU 사용률 알람 임계값(%). 15분 연속 초과 시 알람."
+  type        = number
+  default     = 80
+
+  validation {
+    condition     = var.alarm_rds_cpu_percent > 0 && var.alarm_rds_cpu_percent <= 100
+    error_message = "alarm_rds_cpu_percent 는 1~100 이어야 합니다."
+  }
+}
+
+variable "alarm_redis_memory_percent" {
+  description = "Redis 메모리 사용률 알람 임계값(%). maxmemory-policy 가 volatile-lru 라 가득 차면 축출이 아니라 쓰기 실패가 난다."
+  type        = number
+  default     = 80
+
+  validation {
+    condition     = var.alarm_redis_memory_percent > 0 && var.alarm_redis_memory_percent <= 100
+    error_message = "alarm_redis_memory_percent 는 1~100 이어야 합니다."
+  }
+}
+
+variable "alarm_disk_used_percent" {
+  description = "EC2 루트 디스크 사용률 알람 임계값(%). install_cloudwatch_agent = true 일 때만 알람이 만들어진다."
+  type        = number
+  default     = 85
+
+  validation {
+    condition     = var.alarm_disk_used_percent > 0 && var.alarm_disk_used_percent <= 100
+    error_message = "alarm_disk_used_percent 는 1~100 이어야 합니다."
+  }
 }
 
 # ---------------- GitHub Actions (CI/CD) ----------------

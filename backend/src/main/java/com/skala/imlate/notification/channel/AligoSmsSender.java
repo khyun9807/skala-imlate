@@ -1,6 +1,7 @@
 package com.skala.imlate.notification.channel;
 
 import java.nio.charset.Charset;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,6 +42,8 @@ public class AligoSmsSender implements SmsSender {
     private static final int LMS_TITLE_MAX_BYTES = 44;
     /** 본문이 잘렸음을 알리는 꼬리말. */
     private static final String TRUNCATION_MARK = "…(생략)";
+    /** 잔여 건수 조회 엔드포인트(발송 URL 에서 유추하지 못할 때 쓰는 기본값). */
+    private static final String DEFAULT_REMAIN_URL = "https://apis.aligo.in/remain/";
 
     private final RestClient restClient;
     private final SmsProperties properties;
@@ -107,6 +110,78 @@ public class AligoSmsSender implements SmsSender {
             // 타임아웃·연결 실패 등 모든 예외를 흡수한다(서비스 가용성 우선).
             log.warn("Aligo 문자 발송 중 오류: to={}, cause={}", PhoneNumbers.mask(receiver), ex.toString());
             return SendResult.fail("Aligo 호출 실패: " + ex.getClass().getSimpleName() + " - " + ex.getMessage());
+        }
+    }
+
+    /**
+     * 남은 발송 건수를 조회한다({@code https://apis.aligo.in/remain/}).
+     *
+     * <p>발송 흐름에 절대 영향을 주지 않는다 — 설정이 비었거나 호출·파싱이 실패하면 로그만 남기고
+     * {@link Optional#empty()} 를 돌려준다. 호출 빈도는 상위(잔액 감시자)가 하루 1회로 제한한다.
+     */
+    @Override
+    public Optional<SmsBalance> remainingBalance() {
+        SmsProperties.Aligo config = properties.aligo();
+        if (config.apiKey().isBlank() || config.userId().isBlank()) {
+            log.debug("Aligo 설정이 비어 있어 잔여 건수를 조회하지 않습니다.");
+            return Optional.empty();
+        }
+
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("key", config.apiKey());
+        form.add("user_id", config.userId());
+
+        try {
+            ResponseEntity<String> response = restClient.post()
+                    .uri(remainUrl(config.apiUrl()))
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .body(form)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::isError, (request, clientResponse) -> { })
+                    .toEntity(String.class);
+            return parseRemain(response.getBody());
+        } catch (Exception ex) {
+            // 잔액 조회는 부가 기능이다. 실패해도 발송 결과에 아무 영향을 주지 않는다.
+            log.warn("Aligo 잔여 건수 조회 실패(무시): cause={}", ex.toString());
+            return Optional.empty();
+        }
+    }
+
+    /** 발송 URL 의 마지막 경로만 {@code remain} 으로 바꾼다. 형태가 다르면 기본 엔드포인트를 쓴다. */
+    static String remainUrl(String sendUrl) {
+        if (sendUrl == null || sendUrl.isBlank()) {
+            return DEFAULT_REMAIN_URL;
+        }
+        String trimmed = sendUrl.trim();
+        String withoutTrailingSlash = trimmed.endsWith("/")
+                ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
+        int lastSlash = withoutTrailingSlash.lastIndexOf('/');
+        if (lastSlash <= "https://".length()) {
+            return DEFAULT_REMAIN_URL;
+        }
+        return withoutTrailingSlash.substring(0, lastSlash + 1) + "remain/";
+    }
+
+    /** 잔여 건수 응답 파싱. {@code result_code=1} 이 아니면 비어 있는 값으로 본다. */
+    private Optional<SmsBalance> parseRemain(String rawBody) {
+        if (rawBody == null || rawBody.isBlank()) {
+            log.warn("Aligo 잔여 건수 응답이 비어 있습니다(무시).");
+            return Optional.empty();
+        }
+        try {
+            JsonNode root = objectMapper.readTree(rawBody);
+            if (root.path("result_code").asInt(Integer.MIN_VALUE) != 1) {
+                log.warn("Aligo 잔여 건수 조회 실패(무시): body={}", abbreviate(rawBody));
+                return Optional.empty();
+            }
+            // 응답 필드는 문자열("6329")로 오는 경우가 있어 asInt 의 문자열 파싱에 기댄다.
+            return Optional.of(new SmsBalance(
+                    root.path("SMS_CNT").asInt(0),
+                    root.path("LMS_CNT").asInt(0),
+                    root.path("MMS_CNT").asInt(0)));
+        } catch (Exception ex) {
+            log.warn("Aligo 잔여 건수 응답 해석 실패(무시): cause={}", ex.toString());
+            return Optional.empty();
         }
     }
 

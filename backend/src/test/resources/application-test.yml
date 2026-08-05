@@ -128,6 +128,20 @@ imlate:
         phone: "01000000000"
         email: "supervisor@example.com"
 
+    # 컨텍스트 테스트에서 실제 알림이 나가지 않도록 끈다(발송기는 noop 이지만 경로 자체를 막는다).
+    ops-alert:
+      enabled: false
+      email: "ops-test@example.com"
+      phone: ""
+      notify-on-success: false
+
+    # 하트비트도 끈다 → NoopDispatchHeartbeatPublisher 가 선택되어 자격증명 없이 기동한다.
+    heartbeat:
+      enabled: false
+      publisher: "none"
+      namespace: "Imlate"
+      environment: "test"
+
   sms:
     provider: "noop"
     aligo:
@@ -138,6 +152,8 @@ imlate:
       test-mode: true
       connect-timeout-ms: 1000
       read-timeout-ms: 1000
+      # 테스트에서는 잔액 감시를 하지 않는다(0 이하 = 감시 안 함).
+      low-balance-threshold: 0
 
   email:
     provider: "noop"

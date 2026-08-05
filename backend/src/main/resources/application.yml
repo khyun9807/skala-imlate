@@ -199,6 +199,33 @@ imlate:
         phone: "${IMLATE_SUPERVISOR2_PHONE:}"
         email: "${IMLATE_SUPERVISOR2_EMAIL:}"
 
+    # 운영자 알림 — 발송에 실패했는데 아무도 모르는 상황을 없앤다.
+    #
+    #   ※ 수신처는 사감과 반드시 분리한다. 사감에게 가는 것은 "오늘 밤 복귀 명단"뿐이어야 한다.
+    #     운영 알림이 사감에게 섞이면 사감이 명단 문자와 혼동해 진짜 명단을 놓칠 수 있다.
+    #   ※ phone 기본값이 비어 있는 이유: 잘못된 번호를 넣으면 그 문자는 사감에게 간다.
+    #     "설정하지 않으면 문자 알림 없음"이 안전한 기본값이다(메일만으로도 운영자는 인지한다).
+    #     혹시 사감 번호와 같은 값이 들어오면 앱이 발송을 거부하고 오류 로그만 남긴다.
+    ops-alert:
+      enabled: ${IMLATE_NOTIFICATION_OPS_ALERT_ENABLED:true}
+      # 비우면 위 contact-email 을 그대로 쓴다.
+      email: "${IMLATE_NOTIFICATION_OPS_ALERT_EMAIL:}"
+      # 비워 둘 것. 문자 알림이 꼭 필요할 때만 운영자 개인 번호를 넣는다.
+      phone: "${IMLATE_NOTIFICATION_OPS_ALERT_PHONE:}"
+      # 성공까지 매일 알리면 알림 피로가 생겨 정작 실패 알림을 무시하게 된다.
+      notify-on-success: ${IMLATE_NOTIFICATION_OPS_ALERT_NOTIFY_ON_SUCCESS:false}
+
+    # 발송 완료 하트비트 — 21:50 에 "아무 일도 일어나지 않은 경우"(인스턴스 다운)를 밖에서 감지한다.
+    #   앱은 발송을 끝냈다는 신호만 남기고, 신호가 오지 않는 것을 CloudWatch 알람이 판정한다.
+    #   현재 구현은 정해진 형식의 로그 한 줄이며, 로그 지표 필터가 지표로 바꾼다
+    #   (LogDispatchHeartbeatPublisher 주석에 필터 패턴이 있다).
+    heartbeat:
+      enabled: ${IMLATE_NOTIFICATION_HEARTBEAT_ENABLED:true}
+      # log = 로그만 / cloudwatch = PutMetricData 로 실제 지표 발행 / none = 끔
+      publisher: "${IMLATE_NOTIFICATION_HEARTBEAT_PUBLISHER:log}"
+      namespace: "${IMLATE_NOTIFICATION_HEARTBEAT_NAMESPACE:Imlate}"
+      environment: "${IMLATE_ENV:local}"
+
   # 문자 발송 (R11) — aligo | noop
   sms:
     provider: "${IMLATE_SMS_PROVIDER:noop}"
@@ -210,6 +237,11 @@ imlate:
       test-mode: ${IMLATE_ALIGO_TEST_MODE:true}
       connect-timeout-ms: 3000
       read-timeout-ms: 5000
+      # 잔여 건수가 이 값 미만이면 WARN 로그 + 운영자 알림. 0 이하면 감시하지 않는다.
+      #   발송 직후 하루 1회만 조회한다(매 발송마다 외부 호출을 늘릴 이유가 없다).
+      #   100건 근거: 사감 2명 × 하루 1회 = 2건/일이므로 약 50일치 여유다.
+      #   충전에 필요한 시간(영업일 처리)을 감안해도 충분히 이르게 알 수 있다.
+      low-balance-threshold: ${IMLATE_ALIGO_LOW_BALANCE_THRESHOLD:100}
 
   # 이메일 발송 (R11) — ses | noop
   email:

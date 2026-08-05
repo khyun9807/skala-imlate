@@ -20,6 +20,8 @@ import org.springframework.boot.context.properties.bind.ConstructorBinding;
  * @param contactName    안내 문구에 노출할 문의처 이름(기본 "SKALA 운영진")
  * @param contactEmail   안내 문구에 노출할 문의처 이메일(기본 "khdev07@naver.com")
  * @param supervisors    수신 사감 목록
+ * @param opsAlert       발송 실패 시 운영자에게 보내는 알림 설정(사감 수신처와 <b>분리</b>)
+ * @param heartbeat      발송 완료 하트비트(외부 감시용) 설정
  */
 @ConfigurationProperties(prefix = "imlate.notification")
 public record NotificationProperties(
@@ -30,7 +32,9 @@ public record NotificationProperties(
         long lockTtlSeconds,
         String contactName,
         String contactEmail,
-        List<Supervisor> supervisors
+        List<Supervisor> supervisors,
+        OpsAlert opsAlert,
+        Heartbeat heartbeat
 ) {
 
     /**
@@ -78,6 +82,9 @@ public record NotificationProperties(
         }
         // 불변 리스트로 고정한다. 미설정이면 빈 목록.
         supervisors = supervisors == null ? List.of() : List.copyOf(supervisors);
+        // 운영자 알림 수신 메일은 미지정 시 문의처 메일을 그대로 쓴다(위 contactEmail 기본값 처리 이후여야 한다).
+        opsAlert = OpsAlert.normalize(opsAlert, contactEmail);
+        heartbeat = heartbeat == null ? Heartbeat.defaults() : heartbeat;
     }
 
     /**
@@ -96,7 +103,45 @@ public record NotificationProperties(
     public NotificationProperties(boolean enabled, String dispatchCron, String retryCron,
                                   int maxAttempts, long lockTtlSeconds,
                                   List<Supervisor> supervisors) {
-        this(enabled, dispatchCron, retryCron, maxAttempts, lockTtlSeconds, null, null, supervisors);
+        this(enabled, dispatchCron, retryCron, maxAttempts, lockTtlSeconds, supervisors, null);
+    }
+
+    /**
+     * 운영자 알림 설정만 지정하는 축약 생성자(주로 테스트).
+     *
+     * @param enabled        발송 기능 사용 여부
+     * @param dispatchCron   정기 발송 cron
+     * @param retryCron      실패 재시도 cron
+     * @param maxAttempts    채널별 최대 시도 횟수
+     * @param lockTtlSeconds 중복 발송 방지용 Redis 락 TTL(초)
+     * @param supervisors    수신 사감 목록
+     * @param opsAlert       운영자 알림 설정(null 이면 기본값)
+     */
+    public NotificationProperties(boolean enabled, String dispatchCron, String retryCron,
+                                  int maxAttempts, long lockTtlSeconds,
+                                  List<Supervisor> supervisors, OpsAlert opsAlert) {
+        this(enabled, dispatchCron, retryCron, maxAttempts, lockTtlSeconds, null, null,
+                supervisors, opsAlert, null);
+    }
+
+    /**
+     * 문의처만 지정하는 축약 생성자(주로 테스트).
+     *
+     * @param enabled        발송 기능 사용 여부
+     * @param dispatchCron   정기 발송 cron
+     * @param retryCron      실패 재시도 cron
+     * @param maxAttempts    채널별 최대 시도 횟수
+     * @param lockTtlSeconds 중복 발송 방지용 Redis 락 TTL(초)
+     * @param contactName    문의처 이름
+     * @param contactEmail   문의처 이메일
+     * @param supervisors    수신 사감 목록
+     */
+    public NotificationProperties(boolean enabled, String dispatchCron, String retryCron,
+                                  int maxAttempts, long lockTtlSeconds,
+                                  String contactName, String contactEmail,
+                                  List<Supervisor> supervisors) {
+        this(enabled, dispatchCron, retryCron, maxAttempts, lockTtlSeconds,
+                contactName, contactEmail, supervisors, null, null);
     }
 
     /**
@@ -118,6 +163,90 @@ public record NotificationProperties(
             if (email == null) {
                 email = "";
             }
+        }
+    }
+
+    /**
+     * 운영자 알림 설정(`imlate.notification.ops-alert.*`).
+     *
+     * <p><b>사감 수신처와 반드시 분리한다.</b> 사감에게 가는 것은 "오늘 밤 복귀 명단"뿐이고,
+     * 발송 실패·잔액 부족 같은 운영 이슈는 운영자만 받아야 한다. 사감에게 운영 알림이 가면
+     * 사감이 명단 문자와 혼동해 실제 명단을 놓칠 수 있다.
+     *
+     * <p>{@code phone} 기본값이 빈 값인 이유: 잘못된 번호가 들어가면 그 문자는 사감에게 간다.
+     * "설정하지 않으면 문자 알림 없음"이 안전한 기본값이다(메일만으로도 운영자는 인지한다).
+     *
+     * @param enabled         운영자 알림 사용 여부(미설정이면 true)
+     * @param email           운영자 알림 수신 메일(비우면 {@code contact-email} 과 동일)
+     * @param phone           운영자 알림 수신 번호(<b>비우면 문자 알림을 하지 않는다 — 기본값</b>)
+     * @param notifyOnSuccess 전부 성공했을 때도 알릴지 여부(기본 false — 매일 오는 알림은 무시하게 된다)
+     */
+    public record OpsAlert(Boolean enabled, String email, String phone, boolean notifyOnSuccess) {
+
+        public OpsAlert {
+            // 미설정(null)과 명시적 false 를 구분해야 해서 원시형 boolean 이 아니라 Boolean 을 쓴다.
+            enabled = enabled == null || enabled;
+            email = email == null ? "" : email.trim();
+            phone = phone == null ? "" : phone.trim();
+        }
+
+        /** 설정이 통째로 비어 있을 때/메일이 비었을 때 문의처 메일로 채운 값을 만든다. */
+        static OpsAlert normalize(OpsAlert source, String fallbackEmail) {
+            OpsAlert base = source == null ? new OpsAlert(null, null, null, false) : source;
+            if (!base.email().isBlank()) {
+                return base;
+            }
+            return new OpsAlert(base.enabled(), fallbackEmail, base.phone(), base.notifyOnSuccess());
+        }
+
+        /** 문자 알림을 보낼 수 있는지(번호가 설정되어 있는지). */
+        public boolean hasPhone() {
+            return !phone.isBlank();
+        }
+    }
+
+    /**
+     * 발송 완료 하트비트 설정(`imlate.notification.heartbeat.*`).
+     *
+     * <p>21:50 에 <b>아무 일도 일어나지 않은 경우</b>(인스턴스 다운 등)를 밖에서 감지하기 위한 신호다.
+     * 앱은 "발송을 끝냈다"는 사실만 남기고, 그 신호가 오지 않는 것을 CloudWatch 알람이 판정한다.
+     *
+     * @param enabled     하트비트 사용 여부(미설정이면 true. 로컬/테스트에서는 false 로 끈다)
+     * @param namespace   CloudWatch 네임스페이스(기본 "Imlate")
+     * @param environment 지표 차원 {@code Environment} 값(기본 "local")
+     */
+    public record Heartbeat(Boolean enabled, String publisher, String namespace, String environment) {
+
+        /**
+         * 발행기 선택. {@code log} | {@code cloudwatch} | {@code none}.
+         *
+         * <p>구현이 셋이라 {@code enabled} 하나로는 배타적으로 갈리지 않는다
+         * ({@code @ConditionalOnProperty} 는 서로 다른 두 프로퍼티의 AND 를 표현하지 못한다).
+         * 그래서 선택은 이 값 하나로만 한다.
+         */
+        public static final String DEFAULT_PUBLISHER = "log";
+
+        /** CloudWatch 네임스페이스 기본값. */
+        public static final String DEFAULT_NAMESPACE = "Imlate";
+
+        /** {@code Environment} 차원 기본값. */
+        public static final String DEFAULT_ENVIRONMENT = "local";
+
+        public Heartbeat {
+            enabled = enabled == null || enabled;
+            if (publisher == null || publisher.isBlank()) {
+                publisher = DEFAULT_PUBLISHER;
+            }
+            if (namespace == null || namespace.isBlank()) {
+                namespace = DEFAULT_NAMESPACE;
+            }
+            if (environment == null || environment.isBlank()) {
+                environment = DEFAULT_ENVIRONMENT;
+            }
+        }
+
+        static Heartbeat defaults() {
+            return new Heartbeat(null, null, null, null);
         }
     }
 }

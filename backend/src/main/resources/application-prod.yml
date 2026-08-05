@@ -96,6 +96,26 @@ imlate:
         phone: "${IMLATE_SUPERVISOR2_PHONE}"
         email: "${IMLATE_SUPERVISOR2_EMAIL}"
 
+    # 운영자 알림. 사감 수신처와 분리된 별도 설정이다.
+    #   · email 을 비우면 contact-email(운영진 문의처)로 간다. 사감 메일 목록과 무관하다.
+    #   · phone 은 비워 둔다. 값을 넣는 순간 문자가 나가고, 잘못 넣으면 사감에게 간다.
+    #     (사감 번호와 같은 값이면 앱이 발송을 거부한다)
+    ops-alert:
+      enabled: ${IMLATE_NOTIFICATION_OPS_ALERT_ENABLED:true}
+      email: "${IMLATE_NOTIFICATION_OPS_ALERT_EMAIL:}"
+      phone: "${IMLATE_NOTIFICATION_OPS_ALERT_PHONE:}"
+      notify-on-success: ${IMLATE_NOTIFICATION_OPS_ALERT_NOTIFY_ON_SUCCESS:false}
+
+    # 하트비트. 운영에서는 반드시 켠다 — 이 신호가 없으면 인스턴스가 죽어도 아무도 모른다.
+    heartbeat:
+      enabled: ${IMLATE_NOTIFICATION_HEARTBEAT_ENABLED:true}
+      # 운영에서는 CloudWatch 지표를 실제로 올린다.
+      # 이 지표가 21:50 이후 올라오지 않으면 "발송이 아예 실행되지 않았다"는 뜻이고,
+      # modules/monitoring 의 하트비트 알람이 통금(22:30) 전에 이를 알려 준다.
+      publisher: "${IMLATE_NOTIFICATION_HEARTBEAT_PUBLISHER:cloudwatch}"
+      namespace: "${IMLATE_NOTIFICATION_HEARTBEAT_NAMESPACE:Imlate}"
+      environment: "${IMLATE_ENV:prod}"
+
   sms:
     provider: aligo
     aligo:
@@ -104,6 +124,8 @@ imlate:
       user-id: "${IMLATE_ALIGO_USER_ID}"
       sender: "${IMLATE_ALIGO_SENDER}"
       test-mode: ${IMLATE_ALIGO_TEST_MODE:false}
+      # 잔여 건수 경고 임계값(건). 발송 직후 하루 1회만 조회한다.
+      low-balance-threshold: ${IMLATE_ALIGO_LOW_BALANCE_THRESHOLD:100}
 
   email:
     provider: ses

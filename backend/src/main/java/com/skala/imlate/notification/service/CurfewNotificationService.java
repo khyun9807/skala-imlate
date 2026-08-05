@@ -24,6 +24,10 @@ import com.skala.imlate.notification.channel.SendResult;
 import com.skala.imlate.notification.channel.SmsSender;
 import com.skala.imlate.notification.domain.NotificationDispatch;
 import com.skala.imlate.notification.domain.NotificationDispatchRepository;
+import com.skala.imlate.notification.ops.ChannelFailure;
+import com.skala.imlate.notification.ops.DispatchHeartbeat;
+import com.skala.imlate.notification.ops.DispatchHeartbeatPublisher;
+import com.skala.imlate.notification.ops.OpsAlertNotifier;
 import com.skala.imlate.notification.template.CurfewNoticeRenderer;
 import com.skala.imlate.notification.template.NoticePayload;
 import com.skala.imlate.registration.domain.ReturnRegistration;
@@ -38,7 +42,10 @@ import com.skala.imlate.stats.StatsSnapshot;
  *
  * <p>흐름: 활성화 확인 → 분산 락 → 중복 발송 확인 → Redis WAL ↔ DB 대사(누락 복구 포함) →
  * 명단 조회(<b>0명이면 발송하지 않음</b>) → 통계 조회 → 문구 렌더 → 사감별 문자/이메일 발송(재시도 포함) →
- * 이력 저장 → 락 해제.
+ * 이력 저장 → 락 해제 → <b>하트비트 발행 + 운영자 알림</b>.
+ *
+ * <p>마지막 두 단계는 부가 기능이라 실패해도 발송 결과를 바꾸지 않는다({@code afterAttempt} 참고).
+ * 발송 실패가 조용히 묻히던 문제(운영 중 알리고 IP 미등록·SES 미검증으로 두 번 겪음)를 여기서 끊는다.
  *
  * <p>메서드에 {@code @Transactional} 을 걸지 않는다. 외부 발송(수 초 소요)이 DB 트랜잭션을 붙잡으면
  * 커넥션이 고갈되기 때문이다. 이력 저장은 리포지토리 단위 트랜잭션으로 개별 커밋된다.
@@ -64,6 +71,8 @@ public class CurfewNotificationService {
     private final EmailSender emailSender;
     private final NotificationDispatchRepository dispatchRepository;
     private final DispatchLockManager lockManager;
+    private final OpsAlertNotifier opsAlertNotifier;
+    private final DispatchHeartbeatPublisher heartbeatPublisher;
     private final Clock clock;
 
     public CurfewNotificationService(NotificationProperties notificationProperties,
@@ -77,6 +86,8 @@ public class CurfewNotificationService {
                                      EmailSender emailSender,
                                      NotificationDispatchRepository dispatchRepository,
                                      DispatchLockManager lockManager,
+                                     OpsAlertNotifier opsAlertNotifier,
+                                     DispatchHeartbeatPublisher heartbeatPublisher,
                                      Clock clock) {
         this.notificationProperties = notificationProperties;
         this.imlateProperties = imlateProperties;
@@ -89,6 +100,8 @@ public class CurfewNotificationService {
         this.emailSender = emailSender;
         this.dispatchRepository = dispatchRepository;
         this.lockManager = lockManager;
+        this.opsAlertNotifier = opsAlertNotifier;
+        this.heartbeatPublisher = heartbeatPublisher;
         this.clock = clock;
     }
 
@@ -102,9 +115,10 @@ public class CurfewNotificationService {
         LocalDate target = resolveDate(date);
         if (!notificationProperties.enabled() && !force) {
             log.info("사감 발송이 비활성화되어 있어 실행하지 않습니다(imlate.notification.enabled=false). date={}", target);
-            return DispatchSummary.ofSkipped(target, "DISABLED");
+            return afterAttempt(new ExecutionResult(DispatchSummary.ofSkipped(target, "DISABLED"), List.of()),
+                    DispatchHeartbeat.Kind.DISPATCH);
         }
-        return execute(target, force, null);
+        return afterAttempt(execute(target, force, null), DispatchHeartbeat.Kind.DISPATCH);
     }
 
     /** 실패 이력이 남아 있는 채널만 재발송한다. */
@@ -112,16 +126,18 @@ public class CurfewNotificationService {
         LocalDate target = resolveDate(date);
         if (!notificationProperties.enabled()) {
             log.info("사감 발송이 비활성화되어 있어 재시도하지 않습니다. date={}", target);
-            return DispatchSummary.ofSkipped(target, "DISABLED");
+            return afterAttempt(new ExecutionResult(DispatchSummary.ofSkipped(target, "DISABLED"), List.of()),
+                    DispatchHeartbeat.Kind.RETRY);
         }
         Set<String> pending = pendingFailures(target);
         if (pending.isEmpty()) {
             log.info("재시도할 실패 이력이 없습니다. date={}", target);
-            return DispatchSummary.ofSkipped(target, "NO_FAILURE");
+            return afterAttempt(new ExecutionResult(DispatchSummary.ofSkipped(target, "NO_FAILURE"), List.of()),
+                    DispatchHeartbeat.Kind.RETRY);
         }
         log.info("실패 채널 재시도를 시작합니다. date={}, targets={}", target, pending);
         // 재시도는 이미 성공한 채널을 건드리지 않으므로 force=true 로 중복 판정을 건너뛴다.
-        return execute(target, true, pending);
+        return afterAttempt(execute(target, true, pending), DispatchHeartbeat.Kind.RETRY);
     }
 
     /** 실제 발송 없이 렌더 결과만 만들어 본다(관리 API preview 용). 대사도 복구 없이 조회만 한다. */
@@ -137,17 +153,17 @@ public class CurfewNotificationService {
     // 내부 구현
     // ------------------------------------------------------------------
 
-    private DispatchSummary execute(LocalDate date, boolean force, Set<String> restrictTo) {
+    private ExecutionResult execute(LocalDate date, boolean force, Set<String> restrictTo) {
         String lockToken = UUID.randomUUID().toString();
         if (!lockManager.tryAcquire(date, lockToken)) {
             log.warn("다른 인스턴스가 이미 발송 중이라 건너뜁니다. date={}", date);
-            return DispatchSummary.ofSkipped(date, "LOCK_NOT_ACQUIRED");
+            return ExecutionResult.skipped(date, "LOCK_NOT_ACQUIRED");
         }
         try {
             if (!force && dispatchRepository.countByDispatchDateAndStatus(
                     date, NotificationDispatch.STATUS_SUCCESS) > 0) {
                 log.info("이미 성공한 발송 이력이 있어 재발송하지 않습니다. date={}", date);
-                return DispatchSummary.ofSkipped(date, "ALREADY_SENT");
+                return ExecutionResult.skipped(date, "ALREADY_SENT");
             }
 
             // WAL ↔ DB 대사(누락분 복구 포함) 후 명단을 읽는다.
@@ -155,14 +171,15 @@ public class CurfewNotificationService {
             if (payload.totalCount() == 0) {
                 // 요구사항: 1명도 없으면 발송하지 않는다.
                 log.info("복귀 등록 인원이 0명이라 사감 발송을 하지 않습니다. date={}", date);
-                return DispatchSummary.ofSkipped(date, "NO_REGISTRATION");
+                return ExecutionResult.skipped(date, "NO_REGISTRATION");
             }
 
             List<NotificationProperties.Supervisor> supervisors = notificationProperties.supervisors();
             if (supervisors.isEmpty()) {
                 log.warn("수신 사감이 설정되어 있지 않습니다(imlate.notification.supervisors). date={}, count={}",
                         date, payload.totalCount());
-                return DispatchSummary.ofSkipped(date, "NO_SUPERVISOR", payload.totalCount());
+                return new ExecutionResult(
+                        DispatchSummary.ofSkipped(date, "NO_SUPERVISOR", payload.totalCount()), List.of());
             }
 
             String smsTitle = renderer.smsTitle(payload);
@@ -176,6 +193,8 @@ public class CurfewNotificationService {
             int smsFailed = 0;
             int emailSuccess = 0;
             int emailFailed = 0;
+            // 운영자 알림·지표에 쓸 최종 실패 목록. 재시도까지 모두 실패한 건만 담긴다.
+            List<ChannelFailure> failures = new ArrayList<>();
 
             for (NotificationProperties.Supervisor supervisor : supervisors) {
                 // ---- 문자 ----
@@ -186,13 +205,14 @@ public class CurfewNotificationService {
                                 targetCount, "전화번호가 설정되지 않았습니다.");
                     }
                 } else if (isTargeted(restrictTo, NotificationDispatch.CHANNEL_SMS, phone)) {
-                    boolean ok = sendWithRetry(date, NotificationDispatch.CHANNEL_SMS, supervisor.name(),
-                            phone, targetCount, PhoneNumbers.mask(phone),
+                    ChannelFailure failure = sendWithRetry(date, NotificationDispatch.CHANNEL_SMS,
+                            supervisor.name(), phone, targetCount, PhoneNumbers.mask(phone),
                             () -> smsSender.send(phone, smsTitle, smsBody));
-                    if (ok) {
+                    if (failure == null) {
                         smsSuccess++;
                     } else {
                         smsFailed++;
+                        failures.add(failure);
                     }
                 }
 
@@ -204,13 +224,14 @@ public class CurfewNotificationService {
                                 targetCount, "이메일 주소가 설정되지 않았습니다.");
                     }
                 } else if (isTargeted(restrictTo, NotificationDispatch.CHANNEL_EMAIL, email)) {
-                    boolean ok = sendWithRetry(date, NotificationDispatch.CHANNEL_EMAIL, supervisor.name(),
-                            email, targetCount, PhoneNumbers.maskEmail(email),
+                    ChannelFailure failure = sendWithRetry(date, NotificationDispatch.CHANNEL_EMAIL,
+                            supervisor.name(), email, targetCount, PhoneNumbers.maskEmail(email),
                             () -> emailSender.send(email, emailSubject, emailText, emailHtml));
-                    if (ok) {
+                    if (failure == null) {
                         emailSuccess++;
                     } else {
                         emailFailed++;
+                        failures.add(failure);
                     }
                 }
             }
@@ -219,10 +240,38 @@ public class CurfewNotificationService {
                     smsSuccess, smsFailed, emailSuccess, emailFailed, payload.lookupUrl());
             log.info("사감 발송 완료: date={}, 인원={}명, SMS 성공/실패={}/{}, EMAIL 성공/실패={}/{}, 조회URL={}",
                     date, targetCount, smsSuccess, smsFailed, emailSuccess, emailFailed, payload.lookupUrl());
-            return summary;
+            return new ExecutionResult(summary, failures);
         } finally {
             lockManager.release(date, lockToken);
         }
+    }
+
+    /**
+     * 발송 시도가 끝난 뒤 공통 후처리 — 하트비트 발행과 운영자 알림.
+     *
+     * <p>둘 다 <b>부가 기능</b>이다. 여기서 무슨 일이 생겨도 발송 결과({@link DispatchSummary})는
+     * 그대로 돌려준다. 그래서 각각을 따로 try/catch 로 감싼다(하나가 죽어도 다른 하나는 수행된다).
+     */
+    private DispatchSummary afterAttempt(ExecutionResult result, DispatchHeartbeat.Kind kind) {
+        DispatchSummary summary = result.summary();
+        try {
+            heartbeatPublisher.publish(new DispatchHeartbeat(kind, summary.date(),
+                    describeResult(summary), summary.targetCount(), result.failures()));
+        } catch (Exception ex) {
+            log.warn("하트비트 발행에 실패했습니다(발송 결과에는 영향 없음). date={}, cause={}",
+                    summary.date(), ex.toString());
+        }
+        try {
+            opsAlertNotifier.notifyDispatchResult(summary, result.failures());
+        } catch (Exception ex) {
+            log.error("운영자 알림에 실패했습니다(발송 결과에는 영향 없음). date={}", summary.date(), ex);
+        }
+        return summary;
+    }
+
+    /** 하트비트에 실을 결과 문자열. 예) {@code SENT}, {@code SKIPPED:NO_REGISTRATION} */
+    private static String describeResult(DispatchSummary summary) {
+        return summary.skipped() ? "SKIPPED:" + summary.skipReason() : "SENT";
     }
 
     /** 안내문 입력 묶음을 만든다. {@code recover=true} 면 WAL 누락분을 DB 로 복구한다. */
@@ -311,10 +360,10 @@ public class CurfewNotificationService {
     /**
      * 한 채널을 최대 {@code maxAttempts} 회까지 시도한다. 실패 시 1s → 2s → 4s 백오프.
      *
-     * @return 성공 여부
+     * @return 성공하면 {@code null}, 최종 실패하면 실패 정보(운영자 알림·지표 입력)
      */
-    private boolean sendWithRetry(LocalDate date, String channel, String recipientName, String recipient,
-                                  int targetCount, String maskedRecipient, Supplier<SendResult> action) {
+    private ChannelFailure sendWithRetry(LocalDate date, String channel, String recipientName, String recipient,
+                                         int targetCount, String maskedRecipient, Supplier<SendResult> action) {
         int maxAttempts = Math.max(1, notificationProperties.maxAttempts());
         SendResult last = SendResult.fail("발송이 시도되지 않았습니다.");
 
@@ -325,7 +374,7 @@ public class CurfewNotificationService {
                         attempt, targetCount, last.providerMessageId(), LocalDateTime.now(clock)));
                 log.info("{} 발송 성공: to={}, attempt={}/{}, msgId={}",
                         channel, maskedRecipient, attempt, maxAttempts, last.providerMessageId());
-                return true;
+                return null;
             }
             log.warn("{} 발송 실패: to={}, attempt={}/{}, reason={}",
                     channel, maskedRecipient, attempt, maxAttempts, last.errorMessage());
@@ -339,7 +388,7 @@ public class CurfewNotificationService {
                 maxAttempts, targetCount, last.errorMessage(), LocalDateTime.now(clock)));
         log.error("{} 발송 최종 실패: to={}, date={}, reason={}",
                 channel, maskedRecipient, date, last.errorMessage());
-        return false;
+        return new ChannelFailure(channel, recipientName, maskedRecipient, last.errorMessage());
     }
 
     /** 구현체가 계약을 어기고 예외를 던지더라도 스케줄러가 죽지 않도록 한 번 더 감싼다. */
@@ -374,6 +423,20 @@ public class CurfewNotificationService {
 
     private LocalDate resolveDate(LocalDate date) {
         return date != null ? date : LocalDate.now(clock);
+    }
+
+    /**
+     * 내부 실행 결과. 요약({@link DispatchSummary})만으로는 운영자 알림에 필요한
+     * "무엇이 왜 실패했는지"를 알 수 없어 실패 목록을 함께 들고 다닌다.
+     *
+     * @param summary  발송 결과 요약(외부에 반환되는 값)
+     * @param failures 최종 실패 목록
+     */
+    private record ExecutionResult(DispatchSummary summary, List<ChannelFailure> failures) {
+
+        static ExecutionResult skipped(LocalDate date, String reason) {
+            return new ExecutionResult(DispatchSummary.ofSkipped(date, reason), List.of());
+        }
     }
 
     /**
