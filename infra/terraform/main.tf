@@ -52,6 +52,19 @@ locals {
 
   ses_configuration_set_name = "${local.name_prefix}-ses"
 
+  # ---- SES 샌드박스 수신자 ----
+  # 샌드박스에서는 수신자도 검증된 아이덴티티여야 메일이 전달된다.
+  # 프로덕션 액세스 없이 운영하려면 사감 수신 주소를 아이덴티티로 등록해야 한다.
+  # 발신 아이덴티티와 중복되는 주소는 제외한다(이미 검증되어 있으므로).
+  ses_recipient_candidates = concat(
+    var.ses_verify_supervisor_emails ? [var.supervisor1_email, var.supervisor2_email] : [],
+    var.ses_additional_verified_emails,
+  )
+  ses_recipient_identities = sort(distinct([
+    for email in local.ses_recipient_candidates : lower(trimspace(email))
+    if trimspace(email) != "" && lower(trimspace(email)) != lower(trimspace(var.ses_identity))
+  ]))
+
   # IAM 정책 리소스 목록. 리스트 "길이"가 plan 단계에서 확정되도록 변수만으로 분기한다
   # (compact() 로 null 을 걸러내면 길이가 unknown 이 되어 정책 문서가 통째로 apply 로 미뤄진다).
   ses_identity_arns   = local.ses_managed ? [module.ses.identity_arn] : []
@@ -162,6 +175,7 @@ module "ses" {
 
   enabled                  = var.enable_ses
   identity                 = var.ses_identity
+  recipient_identities     = local.ses_recipient_identities
   enable_configuration_set = var.enable_ses_configuration_set
   configuration_set_name   = local.ses_configuration_set_name
 }

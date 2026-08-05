@@ -182,17 +182,34 @@ SES 샌드박스 제한은 다음과 같습니다.
 
 검증해야 할 주소:
 
-| 무엇 | 개수 | 대응 설정 |
+| 무엇 | 개수 | 대응 설정 | 누가 만드나 |
+|---|---|---|---|
+| 발신 주소 | 1 | `ses_identity`(또는 `ses_from_address`) | terraform (`module.ses.this`) |
+| 사감 수신 주소 | 사감 수만큼 | `supervisor1_email`, `supervisor2_email` … | **terraform** (`module.ses.recipients`) |
+
+**수신 주소도 terraform 이 자동으로 아이덴티티로 등록합니다.**
+`ses_verify_supervisor_emails = true`(기본값)이면 `supervisor*_email` 이 SES 아이덴티티로 생성됩니다.
+발신 아이덴티티와 같은 주소는 중복 생성하지 않으며, 중복 주소는 제거됩니다.
+
+| 변수 | 기본값 | 용도 |
 |---|---|---|
-| 발신 주소 | 1 | `ses_identity`(또는 `ses_from_address`) |
-| 사감 수신 주소 | 사감 수만큼 | `supervisor1_email`, `supervisor2_email` … |
+| `ses_verify_supervisor_emails` | `true` | 사감 수신 주소를 SES 아이덴티티로 등록 |
+| `ses_additional_verified_emails` | `[]` | 운영자 알림 등 추가 수신 주소 |
 
-```
-SES → Identities → Create identity → Email address → 주소 입력
-   → 해당 주소로 온 AWS 확인 메일의 링크 클릭 → Verified
+`apply` 후 **각 주소 소유자가 AWS 확인 메일의 링크를 눌러야** `Verified` 가 됩니다.
+
+```powershell
+terraform output -json ses_recipient_identities
 ```
 
-> 트레이드오프: 사감이 교체되면 새 주소를 다시 검증해야 합니다.
+```powershell
+aws sesv2 get-email-identity --email-identity "someone@example.com" --region ap-northeast-2 --query VerifiedForSendingStatus
+```
+
+> **콘솔에서 수동으로 만들지 마세요.** terraform 이 생성하므로 먼저 만들면
+> `apply` 가 `AlreadyExistsException` 으로 실패합니다(§1.4 상단 경고와 동일).
+>
+> 트레이드오프: 사감이 교체되면 `terraform.tfvars` 의 이메일을 바꾸고 다시 `apply` → 새 주소 검증이 필요합니다.
 > 그게 번거로우면 아래 프로덕션 액세스를 신청하세요.
 
 #### 1.4.4 프로덕션 액세스(샌드박스 해제) 신청

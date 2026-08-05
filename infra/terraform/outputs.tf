@@ -192,6 +192,16 @@ output "ses_from_address" {
   value       = local.resolved_ses_from
 }
 
+output "ses_recipient_identities" {
+  description = <<-EOT
+    수신 전용으로 등록한 SES 아이덴티티 목록(샌드박스 운영용).
+    각 주소로 AWS 확인 메일이 발송되며, **소유자가 링크를 눌러야** 메일 수신이 가능하다.
+    상태 확인: aws sesv2 get-email-identity --email-identity <주소> --region <리전>
+  EOT
+  value       = module.ses.recipient_identities
+  sensitive   = true
+}
+
 output "ses_dkim_dns_records" {
   description = "DNS 에 등록해야 할 DKIM CNAME 레코드(도메인 아이덴티티일 때). terraform output -json ses_dkim_dns_records"
   value       = module.ses.dkim_dns_records
@@ -212,8 +222,10 @@ output "next_steps" {
   description = "apply 직후 해야 할 일 요약"
   value = join("\n", [
     "1. SES 검증: ${module.ses.verification_guide}",
-    "2. SES 샌드박스 해제 신청(미신청 시 검증된 주소로만 발송됨).",
-    "3. 알리고 콘솔에서 발신번호 사전등록 및 NAT 공인 IP 화이트리스트 확인.",
+    "2. SES 수신자 검증: 등록된 수신 주소로 AWS 확인 메일이 발송되었습니다. 각 주소 소유자가 링크를 눌러야 합니다.",
+    "   확인: aws sesv2 get-email-identity --email-identity <주소> --region ${var.aws_region} --query VerifiedForSendingStatus",
+    "   (샌드박스로 운영하면 이 검증이 필수입니다. 프로덕션 액세스를 받으면 수신자 검증 없이 발송 가능합니다.)",
+    "3. 알리고: 발신번호 사전등록 확인 + NAT 공인 IP 를 화이트리스트에 등록 → terraform output -json nat_public_ips",
     "4. 배포: infra/scripts/deploy.sh --mode ssm --instance-id ${module.ec2.instance_id} --region ${var.aws_region} --bucket <아티팩트버킷>",
     "   또는 --mode ssh --host <EC2 주소> --key <pem 경로>",
     "5. 헬스체크: curl -fsS ${local.resolved_base_url}/actuator/health",

@@ -15,6 +15,12 @@ output "identity_arn" {
   value       = one(aws_sesv2_email_identity.this[*].arn)
 }
 
+output "recipient_identities" {
+  description = "수신 전용으로 생성한 아이덴티티 목록(샌드박스 운영용)"
+  value       = aws_sesv2_email_identity.recipients[*].email_identity
+  sensitive   = true
+}
+
 output "is_domain_identity" {
   description = "도메인 아이덴티티 여부"
   value       = local.is_domain

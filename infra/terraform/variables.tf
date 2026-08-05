@@ -410,6 +410,24 @@ variable "ses_identity" {
   default     = ""
 }
 
+variable "ses_verify_supervisor_emails" {
+  description = <<-EOT
+    사감 수신 이메일을 SES 아이덴티티로 함께 등록할지 여부.
+
+    SES 샌드박스(프로덕션 액세스 미승인)에서는 **수신자도 검증되어 있어야** 메일이 전달된다.
+    프로덕션 액세스를 받았다면 false 로 두어도 된다.
+    등록하면 각 주소로 AWS 확인 메일이 가고, 주소 소유자가 링크를 눌러야 Verified 가 된다.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "ses_additional_verified_emails" {
+  description = "사감 외에 추가로 검증할 수신 이메일 주소 목록(운영자 알림용 등)"
+  type        = list(string)
+  default     = []
+}
+
 variable "ses_from_address" {
   description = "애플리케이션이 사용할 발신 주소(imlate.email.ses.from). 비우면 ses_identity 를 그대로 쓴다."
   type        = string

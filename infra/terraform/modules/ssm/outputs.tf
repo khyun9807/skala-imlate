@@ -21,6 +21,10 @@ output "environment_variable_names" {
 
 output "parameter_count" {
   description = "생성된 파라미터 개수"
-  value = length(local.parameter_descriptions) +
-  length(aws_ssm_parameter.redis_password) + length(aws_ssm_parameter.ses_configuration_set)
+  # HCL 은 줄 끝 연산자로 식을 이어가지 못한다. 반드시 괄호로 감싼다.
+  value = (
+    length(local.parameter_descriptions)
+    + length(aws_ssm_parameter.redis_password)
+    + length(aws_ssm_parameter.ses_configuration_set)
+  )
 }

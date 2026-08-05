@@ -55,6 +55,25 @@ resource "aws_sesv2_configuration_set" "this" {
   })
 }
 
+/**
+ * 수신 전용 아이덴티티.
+ *
+ * 샌드박스에서는 수신자도 검증되어 있어야 메일이 전달된다. 발신 아이덴티티(this)와
+ * 중복되지 않는 주소만 넘어온다(루트 locals 에서 정리). configuration set 은 붙이지 않는다.
+ */
+# 수신 주소는 sensitive 변수(사감 연락처)에서 오므로 for_each 키로 쓸 수 없다
+# (민감값이 리소스 주소로 노출되기 때문). 대신 count + 인덱스를 쓴다.
+# 목록은 루트에서 정렬해 넘기므로 순서가 안정적이다.
+resource "aws_sesv2_email_identity" "recipients" {
+  count = local.enabled ? length(var.recipient_identities) : 0
+
+  email_identity = var.recipient_identities[count.index]
+
+  tags = merge(var.tags, {
+    Purpose = "sandbox-recipient"
+  })
+}
+
 resource "aws_sesv2_email_identity" "this" {
   count = local.enabled ? 1 : 0
 
