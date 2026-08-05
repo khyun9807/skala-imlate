@@ -83,19 +83,28 @@ test.describe('어제 인원 안내', () => {
     expect(seen.size, `같은 문구만 반복됐다: ${[...seen]}`).toBeGreaterThan(1)
   })
 
-  test('눈에 띄지 않는 자리에 있다 — 헤더·카운트다운·입력 폼보다 뒤에 온다', async ({ page }) => {
+  test('읽히는 자리에 있다 — 카운트다운 아래, 입력 폼 위', async ({ page }) => {
     await open(page)
 
     const note = page.locator('.yesterday-note')
     await expect(note).toBeVisible()
 
-    // 제출 버튼보다 문서상 아래에 있어야 "적당히 눈에 안 띄는" 자리다.
-    const submitBox = await page.getByRole('button', { name: /복귀 등록하기$/ }).boundingBox()
-    const noteBox = await note.boundingBox()
-    expect(noteBox!.y).toBeGreaterThan(submitBox!.y)
+    const noteBox = (await note.boundingBox())!
+    const timerBox = (await page.getByRole('timer').boundingBox())!
+    const formBox = (await page.getByRole('heading', { name: '복귀 정보 입력' }).boundingBox())!
 
-    // 제목(h1/h2)으로 승격되어 있으면 안 된다.
+    // 마감 카운트다운이 이 화면의 주인공이므로 그 위로 올라가면 안 된다.
+    expect(noteBox.y).toBeGreaterThan(timerBox.y)
+    // 스크롤을 끝까지 내려야 보이면 "너무 눈에 안 띈다" — 입력 폼보다는 위에 있어야 한다.
+    expect(noteBox.y).toBeLessThan(formBox.y)
+  })
+
+  test('제목·배지로 승격되지는 않는다 (곁들이는 문구다)', async ({ page }) => {
+    await open(page)
+
     await expect(page.getByRole('heading', { name: /어제 .*명/ })).toHaveCount(0)
+    // 화면 낭독기가 경보처럼 읽어서도 안 된다.
+    await expect(page.locator('.yesterday-note[role="alert"]')).toHaveCount(0)
   })
 
   test('취소 화면에는 표시하지 않는다 (등록 화면에만 곁들인다)', async ({ page }) => {

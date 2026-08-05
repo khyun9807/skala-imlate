@@ -456,6 +456,14 @@ function clearSavedInput(): void {
         </span>
       </section>
 
+      <!--
+        어제 연장 복귀 인원 한 줄.
+        입력 폼 바로 위에 두어 스크롤하지 않아도 눈에 들어오게 하되, 제목이나 배지로 승격시키지는 않는다
+        (마감 카운트다운이 이 화면에서 가장 중요한 정보라 그 자리를 뺏으면 안 된다).
+        인원이 0이거나 값을 못 불러오면 message 가 빈 문자열이라 아예 그려지지 않는다.
+      -->
+      <p v-if="yesterdayMessage" class="yesterday-note no-print">{{ yesterdayMessage }}</p>
+
       <ResultCard v-if="result" ref="resultRef" :result="result" :curfew-time="curfewTimeLabel" />
 
       <div v-if="result" class="no-print">
@@ -577,11 +585,6 @@ function clearSavedInput(): void {
         </ul>
       </section>
 
-      <!--
-        어제 연장 복귀 인원 한 줄. 부가 정보라 눈에 띄지 않게 맨 아래 작은 글씨로 둔다.
-        인원이 0이거나 값을 못 불러오면 message 가 빈 문자열이라 아예 그려지지 않는다.
-      -->
-      <p v-if="yesterdayMessage" class="yesterday-note no-print">{{ yesterdayMessage }}</p>
     </div>
   </main>
 </template>
@@ -651,16 +654,27 @@ function clearSavedInput(): void {
 }
 
 /*
-  어제 인원 한 줄. 등록에 필요한 정보가 아니라 곁들이는 말이므로
-  카드도 테두리도 없이, 화면 맨 아래에 흐린 작은 글씨로만 둔다.
+  어제 인원 한 줄.
+
+  등록에 필요한 정보는 아니지만 읽히라고 넣은 문구다. 처음에는 맨 아래 흐린 글씨로 두었는데
+  "너무 눈에 안 띈다"는 피드백을 받아 입력 폼 바로 위로 올리고 대비를 올렸다.
+  다만 제목·배지로 올리지는 않는다 — 이 화면의 주인공은 마감 카운트다운과 입력 폼이다.
 */
 .yesterday-note {
   margin: 0;
-  padding: 0 var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  /*
+    카운트다운과 같은 파란 틴트(--c-accent-soft)를 쓰면 둘이 한 묶음처럼 읽힌다.
+    이 문구는 마감 안내와 아무 상관이 없으므로 중립 표면 + 테두리로 따로 세운다.
+  */
+  background: var(--c-surface);
+  border: var(--border-width) solid var(--c-border);
+  color: var(--c-text-muted);
   text-align: center;
-  font-size: var(--fs-sm);
-  color: var(--c-text-faint);
+  font-size: var(--fs-base);
   line-height: 1.6;
+  /* 한국어는 단어 중간에서 끊기면 읽기 나빠진다. 좁은 화면에서도 어절 단위로 접히게 한다. */
   word-break: keep-all;
 }
 </style>
