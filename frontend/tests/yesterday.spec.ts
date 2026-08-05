@@ -40,15 +40,15 @@ test.describe('어제 인원 안내', () => {
     const message = await shownMessage(page)
     expect(message, '안내 문구가 그려지지 않았다').not.toBeNull()
     expect(EXPECTED, `예상 밖 문구: ${message}`).toContain(message)
-    expect(message).toContain(`${YESTERDAY_COUNT}명`)
+    expect(message).toContain(`교육생 ${YESTERDAY_COUNT}분`)
   })
 
   test('★ 어제 아무도 없었으면 아예 표시하지 않는다', async ({ page }) => {
     await open(page, { yesterdayCount: 0 })
 
-    // "어제 0명이 …" 는 문장으로 성립하지 않는다. 요소 자체가 없어야 한다.
+    // "어제 교육생 0분이 …" 는 문장으로 성립하지 않는다. 요소 자체가 없어야 한다.
     expect(await shownMessage(page)).toBeNull()
-    await expect(page.getByText('어제 0명')).toHaveCount(0)
+    await expect(page.getByText('교육생 0분')).toHaveCount(0)
   })
 
   test('인원 수를 불러오지 못해도 문구만 감추고 등록은 정상 동작한다', async ({ page }) => {
@@ -102,7 +102,7 @@ test.describe('어제 인원 안내', () => {
   test('제목·배지로 승격되지는 않는다 (곁들이는 문구다)', async ({ page }) => {
     await open(page)
 
-    await expect(page.getByRole('heading', { name: /어제 .*명/ })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: /어제 교육생 .*분/ })).toHaveCount(0)
     // 화면 낭독기가 경보처럼 읽어서도 안 된다.
     await expect(page.locator('.yesterday-note[role="alert"]')).toHaveCount(0)
   })
