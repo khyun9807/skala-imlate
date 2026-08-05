@@ -38,24 +38,25 @@
 
 | 층 | 명령 | 무엇을 검증하는가 | 인프라 | 소요 | **못 보는 것** |
 |---|---|---|---|---|---|
-| ① 백엔드 단위/웹 테스트 (88개) | `.\gradlew.bat test` | 등록 창 정책, 정규화·검증 규칙, 멱등성, WAL↔DB 대사 로직, 발송 오케스트레이션, 문구 렌더, rate limit 토큰버킷, 조회 토큰 HMAC, 컨트롤러 상태코드 | 불필요 (H2 / Mock) | 1~3분 | 실제 MySQL 방언·인코딩, 실제 Redis 동작, Flyway 마이그레이션, 스케줄러 실제 발화 |
+| ① 백엔드 단위/웹 테스트 | `.\gradlew.bat test` | 등록 창 정책, 정규화·검증 규칙, 멱등성, WAL↔DB 대사 로직, 발송 오케스트레이션, 문구 렌더, rate limit 토큰버킷, 조회 토큰 HMAC, 컨트롤러 상태코드 | 불필요 (H2 / Mock) | 1~3분 | 실제 MySQL 방언·인코딩, 실제 Redis 동작, Flyway 마이그레이션, 스케줄러 실제 발화 |
 | ② 프론트 반응형 E2E (90개) | `npm run test:e2e` | 320~2560px 레이아웃 넘침, 다크모드, 폼 검증 문구, 마감/중복/429 안내 문구, 조회 화면 표·검색·인쇄 스타일 | 불필요 (**API 전부 목킹**) | 1~2분 | 백엔드가 실제로 그 응답을 주는지. 목이 거짓말하면 통과한다 |
-| ③ **통합 테스트** | `node scripts/integration-test.mjs` | 기동 중인 앱 + **실제 MySQL/Redis** 로 등록→WAL→DB→대사→발송→조회→통계 전 구간. 429 헤더, 토큰 위조 403, 관리 API 401, 중복 발송 skip | **필요** (앱+DB+Redis 기동) | 1분 내외 | 동시성/성능, 스케줄러 발화 시각, 실제 문자·메일 도달 |
-| ④ **부하 테스트** | `node scripts/load-test.mjs` | 동시 등록 처리량·지연, 커넥션 풀·Redis 포화 시 거동 | **필요** | 수 분 | 정확성. 부하 테스트가 통과해도 데이터가 맞다는 보장은 없다 |
+| ③ **통합 테스트** | `node scripts/integration-test.mjs` | 기동 중인 앱 + **실제 MySQL/Redis** 로 등록→WAL→DB→대사→발송→조회→통계 전 구간. rate limit 2단(같은 IP·다른 사람 통과 / 같은 사람 도배 429 / XFF 위조 무력화), 토큰 위조 403, 관리 API 401, 중복 발송 skip | **필요** (앱+DB+Redis 기동) | 1분 내외 | 동시성/성능, 스케줄러 발화 시각, 실제 문자·메일 도달 |
+| ④ **부하 테스트** | `node scripts/load-test.mjs` | 동시 등록 처리량·지연, 커넥션 풀·Redis 포화 시 거동, **공용 와이파이(전원 같은 IP) 200명 동시 등록** ([§2.5](#25-공용-와이파이-환경-검증-반드시-본다)) | **필요** | 1~3분 | 정확성. 부하 테스트가 통과해도 데이터가 맞다는 보장은 없다 |
 | ⑤ 장애 훈련 | `node scripts/integration-test.mjs --drills` + [§4](#4-장애-훈련-시나리오) 수동 절차 | Redis/MySQL 정지 중 거동, 발송 실패 재시도, 중복 발송 락 | **필요** | 5~15분 | 실제 AWS 장애 양상(ElastiCache 페일오버, RDS Multi-AZ 전환) |
 | ⑥ 수동 눈 검사 | 브라우저 | 실제 사람이 보는 화면·문구·인쇄물 | 필요 | 10분 | 자동화되지 않으므로 매번 사람이 해야 함 |
 | ⑦ 실발송 리허설 | [§7](#7-실발송-리허설-마지막-관문) | Aligo 문자·SES 메일이 **진짜로 도착**하는지, 한글이 안 깨지는지, 조회 링크가 열리는지 | 필요 + 실제 계정 | 10분 | — (여기까지 통과하면 배포 가능) |
 
-> ④ `scripts/load-test.mjs` 는 별도로 추가되는 스크립트다. **옵션은 문서를 믿지 말고 스크립트에게 직접 물어라.**
+> ④ **옵션은 문서를 믿지 말고 스크립트에게 직접 물어라.**
 >
 > ```powershell
 > # PowerShell — 프로젝트 루트
 > node scripts/load-test.mjs --help
 > ```
 >
-> 파일이 없다는 오류(`Cannot find module`)가 나면 아직 추가되지 않은 것이다. ①②③⑤⑥⑦ 만으로도 배포 판단은 가능하다.
-> 다만 **부하 테스트를 돌릴 때는 rate limit 을 반드시 확인**하라. 기본값이 `register` 스코프 **IP당 8회/분**이라,
-> 끄지 않으면 부하 테스트는 429 만 잔뜩 받고 끝난다([§8.7](#87-부하-테스트가-전부-429-만-받는다) 참고).
+> **부하 테스트를 돌릴 때 rate limit 을 끄지 마라.** 예전 문서는 "안 끄면 429 만 받는다"고 안내했지만,
+> 그 안내 자체가 결함을 가리고 있었다([§2.5](#25-공용-와이파이-환경-검증-반드시-본다)).
+> 지금은 **켜 둔 채로 통과해야 정상**이고, 끄면 부하 테스트가 아무것도 증명하지 못한다
+> (스크립트가 `rate limit 이 켜져 있다` 항목으로 이를 검사한다).
 
 ### 이미 있는 것을 다시 만들지 말 것
 
@@ -141,9 +142,20 @@ export IMLATE_REDIS_PORT=16379
 
 ```
 Service clock initialized with zone=Asia/Seoul
-rate limit 인터셉터 등록: enabled=true, failOpen=true, global=120/60s, register=8/60s, lookup=40/60s
+rate limit 인터셉터 등록: enabled=true, failOpen=true, global=1200/60s(IP), register=300/60s(IP), register-person=5/60s(개인), lookup=20/60s(IP), 신뢰 프록시 0개(0개면 X-Forwarded-For 무시)
 Tomcat started on port 8080
 ```
+
+> **rate limit 로그 줄에서 반드시 확인할 것** — `register` 가 **교육생 규모(200)보다 커야** 하고,
+> `register-person` 이 **그보다 훨씬 작아야** 한다. 이 두 조건이 이 시스템의 생사를 가른다([§2.5](#25-공용-와이파이-환경-검증-반드시-본다)).
+> 실제로 바인딩된 값은 아래로도 확인할 수 있다.
+>
+> ```powershell
+> # PowerShell — 창 D
+> curl.exe -s "http://localhost:8080/actuator/env/imlate.rate-limit.register.capacity"
+> curl.exe -s "http://localhost:8080/actuator/env/imlate.rate-limit.register-person.capacity"
+> curl.exe -s "http://localhost:8080/actuator/env/imlate.rate-limit.global.capacity"
+> ```
 
 `local` 프로파일에서는 문자/메일이 **실제로 나가지 않는다**(`noop` 발송기, 로그만 남음).
 관리자 키는 `local-dev-admin-key`, 조회 토큰 시크릿은 `local-dev-lookup-secret-change-me` 가 기본값이다.
@@ -169,7 +181,7 @@ curl.exe -s http://localhost:8080/actuator/health
 curl.exe -s http://localhost:8080/actuator/health/alb
 curl.exe -s http://localhost:8080/api/v1/registrations/window
 
-# 1) 백엔드 단위/웹 테스트 88개  (인프라 없어도 됨)
+# 1) 백엔드 단위/웹 테스트  (인프라 없어도 됨)
 cd backend; .\gradlew.bat test; cd ..
 
 # 2) 프론트 E2E 90개  (백엔드 없어도 됨. dev 서버는 Playwright 가 알아서 재사용/기동)
@@ -199,6 +211,117 @@ curl -s http://localhost:8080/actuator/health
 (cd frontend && npm run test:e2e)
 node scripts/integration-test.mjs --drills
 ```
+
+---
+
+## 2.5 공용 와이파이 환경 검증 ★반드시 본다★
+
+### 무엇을 검증하는가
+
+교육생 약 200명은 **기숙사 공용 와이파이**로 등록한다. NAT 뒤라 **전원이 공인 IP 하나를 공유**한다.
+따라서 이 시스템이 실제로 돌아가는지를 가르는 질문은 하나다.
+
+> **같은 IP 에서 200명이 각자 한 번씩 등록할 때, 전원이 통과하는가?**
+
+이 질문에 답하는 것이 `scripts/load-test.mjs` 의 **§1B 공용 와이파이 시나리오**이며,
+**기본 실행에 항상 포함**된다. 통합 테스트도 §3 에서 같은 성질을 기능 단위로 확인한다.
+
+```powershell
+# PowerShell — 창 D, 프로젝트 루트
+# rate limit 을 켠 채로(= 기본값 그대로) 돌린다. 끄면 아무것도 증명하지 못한다.
+node scripts/load-test.mjs
+
+# 단일 IP 시나리오만 빠르게 보고 싶으면 (IP 분산 기준선을 건너뛴다)
+node scripts/load-test.mjs --same-ip
+
+# 기능 단위 확인 (rate limit 2단 계약)
+node scripts/integration-test.mjs
+```
+
+```bash
+# Git Bash — 창 D (대안)
+cd /c/Users/kkh98/Desktop/skala-imlate
+node scripts/load-test.mjs
+node scripts/integration-test.mjs
+```
+
+### 통과해야 하는 항목 — 이 줄들이 안 보이면 배포하지 않는다
+
+| 스크립트 | 항목 | 의미 |
+|---|---|---|
+| `load-test.mjs` §0B | `register(IP) 한도(300) ≥ 동시 등록 인원(200)` | **설정만 보고도** 알 수 있는 결함. 부하를 걸기 전에 걸러진다 |
+| `load-test.mjs` §0B | `global(IP) 한도(1200) ≥ 인원 × 2` | 학생 1명이 최소 2회(마감 조회 + 등록) 호출한다 |
+| `load-test.mjs` §0B | `register(개인) 한도(5)가 도배를 막을 만큼 작다` | 개인 버킷이 IP 만큼 크면 도배를 방치하는 것이다 |
+| `load-test.mjs` §1B | `★ 같은 IP 의 200명 전원 201 신규 등록` | **핵심.** 여기서 429 가 나오면 마감 직전에 정상 교육생이 차단된다 |
+| `load-test.mjs` §1B | `★ 429 rate limit 차단 0건` / `★ DB 등록 건수 == 200` | 유실 0건 |
+| `load-test.mjs` §3A | `★ 같은 IP · 같은 사람 반복 → 429 차단` | 도배는 여전히 막힌다 |
+| `load-test.mjs` §3B | `★ 도배 차단 중에도 같은 IP 의 다른 사람은 정상 등록(201)` | **옆자리 학생이 연대책임을 지지 않는다** |
+| `load-test.mjs` §3C | `★ 단일 회선의 대량 폭주가 429 로 차단됨` | IP 버킷이 DDoS 방어 역할은 유지한다 |
+| `integration-test.mjs` §3-1 | `★ 같은 IP · 다른 사람 → 201 통과` | 예전 한도(IP당 8회/분)에서 429 가 나던 바로 그 자리 |
+| `integration-test.mjs` §3-3 | `★ 위조 IP 로 만들어진 rate limit 버킷이 없음` | `trusted-proxies` 가 비어 있으면 XFF 를 신뢰하지 않는다 |
+
+**§1B 가 실패하면 한도가 아니라 설계를 의심하라.** 버킷을 IP 하나로만 만들면
+NAT 뒤 200명은 어떤 숫자를 넣어도 결국 막힌다([docs/SPEC.md §8](SPEC.md)).
+
+### 실행 규모 — 요청 수가 늘었다
+
+시나리오가 늘어난 만큼 요청 수도 늘었다. 스크립트가 끝에 **시나리오별 요청 수와 소요**를 표로 찍는다.
+
+```
+        ── 시나리오별 요청 수 / 소요 ─────────────────────────────
+        1.  IP 분산 기준선 (비현실적)             0건 ·    0.0초 ·          -  (건너뜀 — XFF 를 신뢰하지 않는 설정)
+        1B. 공용 와이파이 (같은 IP·다른 사람)   400건 ·    6.2초 ·    65 req/s
+        2.  동시 등록 경합 (멱등성)              20건 ·    0.4초 ·    52 req/s
+        3A. 같은 사람 도배 (개인 버킷)            8건 ·    0.2초 ·    40 req/s
+        3B. 옆자리 사용자 (같은 IP·다른 사람)     1건 ·    0.0초 ·         -
+        3C. 단일 회선 폭주 (IP 버킷)           2201건 ·   14.8초 ·   149 req/s
+        ──────────────────────────────────── ──────    ──────
+        합계 (부하 요청)                       2635건 ·   21.7초
+        전체 소요 (점검·정리 포함)                        38.4초
+```
+
+수치는 PC 성능에 따라 다르다. 보아야 할 것은 **429 가 어디에서 나고 어디에서 안 나는가** 다.
+
+### `--same-ip` 는 이제 무슨 뜻인가
+
+`--same-ip` 는 **§1(IP 분산 기준선)을 건너뛰는 스위치**다. "공격 모드"가 아니다.
+공용 와이파이 시나리오는 플래그와 무관하게 항상 돈다.
+
+또 하나 — **로컬에서는 `X-Forwarded-For` 가 무시된다.**
+`imlate.rate-limit.trusted-proxies` 가 비어 있기 때문이다([SPEC §8.7](SPEC.md)).
+그래서 스크립트가 헤더로 IP 를 나누려 해도 나뉘지 않고, 전원이 하나의 클라이언트로 취급된다.
+스크립트는 이를 **Redis 버킷 키로 직접 확인**한 뒤 §1 을 자동으로 건너뛴다(헤더를 믿고 넘어가지 않는다).
+즉 **로컬 기본 상태가 곧 공용 와이파이 조건**이다.
+
+### 이 결함이 왜 기존 테스트를 전부 통과했는가 — 교훈
+
+> **부하 테스트의 기본 시나리오가 실제 사용 환경과 정반대였다.**
+
+`load-test.mjs` 는 요청마다 다른 `X-Forwarded-For`(10.77.x.x)를 붙여 200명을 **서로 다른 IP** 로
+시뮬레이션했다. 그래서 "200명 동시 등록 전원 성공"이라는 초록색 결과가 나왔다.
+그러나 실제 운영은 **전원이 같은 IP** 다. `--same-ip` 옵션이 있긴 했지만
+"공격 시나리오"로 분류되어 기본 실행에서 빠져 있었고, 아무도 그것이 **정상 사용 환경**임을 눈치채지 못했다.
+
+각 검증 층이 왜 이걸 못 봤는지 정리해 두면 다음에 같은 실수를 줄일 수 있다.
+
+| 층 | 왜 못 봤는가 |
+|---|---|
+| ① 백엔드 단위 테스트 | 토큰 버킷이 "설정한 대로" 동작하는지만 봤다. **설정값 자체가 틀렸다**는 건 단위 테스트의 관심사가 아니었다 |
+| ② 프론트 E2E | API 를 전부 목킹한다. 목이 429 를 안 주면 429 는 존재하지 않는다 |
+| ③ 통합 테스트 | 한도 `8` 을 **하드코딩**해 두고 "9번째가 429 면 통과"라고 단언했다. 결함을 검증하고 있었던 셈이다 |
+| ④ 부하 테스트 | 기본 시나리오가 현실과 반대. **가장 크게 책임이 있는 층** |
+| ⑤ 장애 훈련 | Redis/MySQL 정지만 다뤘다. "정상 상태의 정상 사용자"는 훈련 대상이 아니었다 |
+| ⑥ 수동 눈 검사 | 개발 PC 한 대에서 혼자 눌러 봤다. **혼자서는 200명 뒤의 9번째가 될 수 없다** |
+
+다음에 같은 종류의 결함을 막기 위한 원칙 세 가지.
+
+1. **테스트가 만드는 조건이 실제 사용 조건과 같은지 먼저 따진다.**
+   "몇 명이 동시에" 만 맞추고 "어디에서" 를 틀리면 통과해도 의미가 없다.
+2. **한도·임계값을 테스트에 하드코딩하지 않는다.** 두 스크립트는 이제
+   `/actuator/env` 로 **기동 중인 앱의 실제 설정값**을 읽어 단언을 맞춘다.
+   그래서 백엔드가 숫자를 바꿔도 테스트가 같이 거짓말하지 않는다.
+3. **부등식으로 표현할 수 있는 요구는 설정 검사로 먼저 잡는다.**
+   `register(IP) 한도 ≥ 교육생 규모` 는 요청을 한 건도 보내지 않고 확인할 수 있다(§0B / §3-0).
 
 ---
 
@@ -484,7 +607,7 @@ docker compose stop redis
 | 창 B 로그 | `WAL append failed — 등록은 계속 진행합니다(WAL 미기록).` (WARN) |
 | `/actuator/health` | `status:"DOWN"`, `components.redis.status:"DOWN"` |
 | `/actuator/health/alb` | **`status:"UP"` 유지** — alb 그룹은 `db, ping` 만 포함한다. ElastiCache 장애로 인스턴스를 서비스에서 빼면 오히려 전체가 죽으므로 일부러 제외했다 |
-| rate limit | Redis 대신 로컬 폴백(분당 120)으로 동작. `fail-open=true` |
+| rate limit | Redis 대신 인메모리 폴백(`local-fallback-permits-per-minute`, 기본 **1200** = global 과 같은 수준)으로 동작. `fail-open=true`. **개인 버킷도 이때는 사실상 무력화된다** — 등록을 막는 것보다 낫다는 판단이다 |
 | 발송 락 | `발송 락을 사용할 수 없어 락 없이 진행합니다(DB 이력으로 중복 방지).` — 중복 발송은 `notification_dispatch` 의 SUCCESS 이력으로 막힌다 |
 | 대사 | `Reconciliation skipped — Redis(WAL) unavailable` → 보고 status `WAL_UNAVAILABLE` |
 
@@ -730,8 +853,13 @@ Playwright 90개가 레이아웃·문구를 이미 본다. 여기서는 **자동
 - [ ] **중복 안내** — 방금 등록한 것과 **똑같은** 반/이름/호수로 다시 제출 → 오류가 아니라 "이미 등록되어 있습니다."
       결과 카드가 뜨고, 등록 인원 수가 늘지 않는다.
 - [ ] **공백 정규화** — `" 1반 "` 처럼 앞뒤 공백을 넣어도 같은 사람으로 인식(중복 처리)된다.
-- [ ] **429 안내** — 같은 화면에서 **9회 연속** 서로 다른 인원을 빠르게 등록(`register` 8회/분).
-      9번째에 빨간 안내 "요청이 너무 많습니다… (약 N초 후 다시 시도해 주세요.)" — **N 초가 실제로 표시되는지**가 포인트.
+- [ ] **429 안내** — **같은 인원(반·이름·호수를 그대로)** 으로 6회 이상 다시 제출한다.
+      개인 버킷(`register-person`, 기본 5회/분)에 걸려 빨간 안내가 뜬다 —
+      **N 초가 실제로 표시되는지**, 그리고 문구가 "같은 정보로 너무 자주…" 인지가 포인트.
+      한도값은 `curl.exe -s http://localhost:8080/actuator/env/imlate.rate-limit.register-person.capacity` 로 확인한다.
+- [ ] **429 가 나오면 안 되는 경우** ★ — **서로 다른 인원**을 20명 이상 연속으로 빠르게 등록한다.
+      한 대의 PC = 한 IP 이므로 이것이 곧 공용 와이파이 조건이다. **끝까지 전원 성공해야 한다.**
+      여기서 429 가 나오면 마감 직전 기숙사에서 정상 교육생이 막힌다는 뜻이다([§2.5](#25-공용-와이파이-환경-검증-반드시-본다)).
 - [ ] **입력 검증** — 이름에 `<script>` , 21자 이상, 이모지를 넣어 본다. 제출 전에 필드 아래 빨간 문구가 뜨고 첫 오류 칸으로 포커스가 간다.
 - [ ] **네트워크 오류** — 창 B(백엔드)를 Ctrl+C 로 끈 채 등록 → "네트워크에 연결할 수 없습니다…" (하얀 화면이나 콘솔 에러가 아니라 **사람 문구**여야 한다)
 - [ ] **키보드만으로** — Tab 만으로 반→이름→호수→버튼까지 이동하고 Enter 로 제출된다.
@@ -781,14 +909,24 @@ $K = @{ "X-Admin-Key" = "local-dev-admin-key" }
 
 ### 6.1 자동 검증
 
-- [ ] `cd backend; .\gradlew.bat test` — **88개 전부 통과**
+- [ ] `cd backend; .\gradlew.bat test` — **전부 통과** (실패 0건)
 - [ ] `cd frontend; npm run typecheck` — 오류 0
 - [ ] `cd frontend; npm run test:e2e` — **90개 전부 통과**
 - [ ] `cd frontend; npm run build` — 빌드 성공(`dist/` 생성)
 - [ ] `node scripts/integration-test.mjs` — **실패 0건**
 - [ ] `node scripts/integration-test.mjs --drills` — **실패 0건**
-- [ ] `node scripts/load-test.mjs --help` 로 옵션 확인 후 부하 테스트 1회 — 목표 지연/에러율 충족
+- [ ] `node scripts/load-test.mjs` — **실패 0건**, **rate limit 을 켠 채로**. 목표 지연/에러율 충족
 - [ ] `cd infra\terraform; terraform fmt -check; terraform validate`
+
+**공용 와이파이(rate limit 2단) — 별도로 눈으로 확인한다** ([§2.5](#25-공용-와이파이-환경-검증-반드시-본다))
+
+- [ ] 기동 로그의 `rate limit 인터셉터 등록:` 줄에서 `register` 한도가 **교육생 규모(200)보다 크다**
+- [ ] 같은 줄에서 `register-person` 한도가 **`register` 한도보다 훨씬 작다**
+- [ ] `load-test.mjs §1B` — `★ 같은 IP 의 200명 전원 201 신규 등록` / `★ 429 rate limit 차단 0건`
+- [ ] `load-test.mjs §3A/§3B` — 같은 사람 도배는 429, **같은 IP 의 다른 사람은 201**
+- [ ] `load-test.mjs §3C` — 단일 회선 대량 폭주는 여전히 429 (DDoS 방어 유지)
+- [ ] `integration-test.mjs §3-3` — **위조 `X-Forwarded-For` 로 만들어진 버킷이 없다**
+- [ ] 운영 배포용 `trusted-proxies` 값이 ALB 사설 대역으로 채워져 있다(로컬은 빈 목록이 정상)
 
 ### 6.2 시간 시나리오 (§3)
 
@@ -1061,36 +1199,57 @@ npm run test:e2e
 | 브라우저를 눈으로 보고 싶다 | `npx playwright test --headed` / 한 파일만: `npx playwright test tests/register.spec.ts` |
 | E2E 는 통과하는데 실제로는 깨진다 | **당연하다.** E2E 는 API 를 전부 목킹한다. 실제 응답 검증은 `scripts/integration-test.mjs` 의 몫이다 |
 
-### 8.7 부하 테스트가 전부 429 만 받는다
+### 8.7 부하 테스트나 등록 화면에서 429 가 나온다
 
-기본 rate limit 은 IP당 `register` **8회/분**, `global` **120회/분**이다. 부하 테스트로는 당연히 다 막힌다.
+**먼저 어떤 429 인지 가른다.** 버킷이 2단이라 원인이 두 가지다([SPEC §8](SPEC.md)).
+
+| 상황 | 원인 | 정상인가 |
+|---|---|---|
+| **서로 다른 사람**을 여러 명 등록하는데 429 | IP 버킷(`global` / `register`) 한도가 인원보다 작다 | **아니다. 결함이다.** 아래 참고 |
+| **같은 사람**을 반복 제출해서 429 | 개인 버킷(`register-person`) | **정상.** 도배를 막는 것이 목적이다 |
+| 한 IP 에서 수천 건을 쏴서 429 | IP 버킷(DDoS 방어) | **정상** |
+
+응답의 `X-RateLimit-Limit` 값이 어느 규칙에 걸렸는지 알려 준다
+(`register-person` 이면 5, `register` 면 300, `global` 이면 1200, `lookup` 이면 20).
+개인 버킷에 걸리면 안내 문구도 다르다 — "같은 정보로 너무 자주 등록을 시도했습니다…".
 
 ```powershell
-# PowerShell — 창 B : rate limit 을 끄고 띄운다 (local yml 이 리터럴이라 --args 로만 덮인다)
-.\gradlew.bat bootRun --args='--spring.profiles.active=local --imlate.rate-limit.enabled=false'
+# PowerShell — 창 D : 지금 적용 중인 한도 확인
+curl.exe -s "http://localhost:8080/actuator/env/imlate.rate-limit.global.capacity"
+curl.exe -s "http://localhost:8080/actuator/env/imlate.rate-limit.register.capacity"
+curl.exe -s "http://localhost:8080/actuator/env/imlate.rate-limit.register-person.capacity"
 ```
 
-또는 한도만 크게:
+**첫 번째 행(서로 다른 사람이 막힌다)이면 한도를 임시로 올리는 것으로 넘어가지 마라.**
+그것이 바로 [§2.5](#25-공용-와이파이-환경-검증-반드시-본다) 의 결함이다.
+`imlate.rate-limit.register.capacity` 가 **교육생 규모(200)보다 커야** 한다. 설정을 고쳐서 해결한다.
 
-```powershell
-.\gradlew.bat bootRun --args='--spring.profiles.active=local --imlate.rate-limit.register.capacity=100000 --imlate.rate-limit.register.refill-tokens=100000 --imlate.rate-limit.global.capacity=100000 --imlate.rate-limit.global.refill-tokens=100000'
-```
+> ### rate limit 을 끄고 부하 테스트를 돌리지 마라
+>
+> 예전 이 문서는 "부하 테스트는 rate limit 을 끄고 돌려라"라고 안내했다.
+> **그 안내가 결함을 가리고 있었다.** 끈 채로 돌리면 부하 테스트는 리미터에 대해 아무것도 증명하지 못하고,
+> "공용 와이파이 뒤 200명이 막힌다"는 사실이 초록색 결과 뒤에 숨는다.
+> 지금은 **켠 채로 통과해야 정상**이며, `load-test.mjs` 가 `rate limit 이 켜져 있다` 항목으로 이를 검사한다.
 
-기동 로그에서 실제 적용값을 확인한다.
-
-```
-rate limit 인터셉터 등록: enabled=false, ...
-```
-
-버킷을 직접 비우는 방법도 있다(통합 테스트가 쓰는 방식).
+버킷을 직접 들여다보거나 비우는 방법(스크립트가 쓰는 방식):
 
 ```powershell
 # PowerShell — 창 D
-docker exec imlate-redis redis-cli --scan --pattern "imlate:rl:*"
-docker exec imlate-redis redis-cli flushall
+docker exec imlate-redis redis-cli --scan --pattern "imlate:rl:*"      # IP 버킷 + 개인 버킷이 함께 보인다
+docker exec imlate-redis redis-cli --scan --pattern "imlate:rl:*" | ForEach-Object { docker exec imlate-redis redis-cli del $_ }
 ```
 
-> **부하 테스트 뒤에는 rate limit 을 반드시 되돌린다.** 꺼진 채 배포하면 R14 요구사항이 무너진다.
+> 개인 버킷 키는 `imlate:rl:register-person:{해시 16자}` 형태다. **키에 이름이 보이지 않는 것이 정상**이다
+> — 교육생 실명·호수가 Redis 키로 남지 않도록 `SHA-256(반|이름|호수)` 앞 16자만 쓴다([SPEC §8.3](SPEC.md)).
+
+> 정말로 한도를 임시로 올려야 한다면(예: 500명 규모 리허설) `--args` 로 넘긴다.
+> `application-local.yml` 이 리터럴로 박아 둔 값은 환경변수로 못 바꾼다.
+>
+> ```powershell
+> .\gradlew.bat bootRun --args='--spring.profiles.active=local --imlate.rate-limit.register.capacity=3000 --imlate.rate-limit.register.refill-tokens=3000 --imlate.rate-limit.global.capacity=6000 --imlate.rate-limit.global.refill-tokens=6000'
+> ```
+>
+> **끝나면 반드시 되돌린다.** 임시 한도로 배포하면 R14 요구사항이 무너진다.
 
 ### 8.8 그 밖에 자주 보는 것
 
@@ -1102,7 +1261,9 @@ docker exec imlate-redis redis-cli flushall
 | 발송했는데 `skipped:true, skipReason:"NO_REGISTRATION"` | 그날 등록 인원이 0명. 요구사항상 **0명이면 보내지 않는다**. 먼저 등록을 만든다 |
 | 발송했는데 `skipReason:"DISABLED"` | `IMLATE_NOTIFICATION_ENABLED=false` 로 띄웠다. `force=true` 로는 강제 발송이 가능하다 |
 | 발송했는데 `skipReason:"NO_SUPERVISOR"` | 사감 목록이 비었다. `--args` 로 supervisors 를 덮을 때 리스트가 통째로 교체된 경우가 흔하다([§7](#7-실발송-리허설-마지막-관문) 주의 참고) |
-| `Cannot find module '...\scripts\load-test.mjs'` | 부하 테스트 스크립트가 아직 없다. ①②③⑤⑥⑦ 로 진행한다 |
+| 부하 테스트가 `rate limit 이 켜져 있다` 에서 실패 | `--imlate.rate-limit.enabled=false` 로 앱을 띄워 놓았다. **켜고 다시 돌린다**([§8.7](#87-부하-테스트나-등록-화면에서-429-가-나온다)) |
+| 부하 테스트 §0B 의 `register(IP) 한도 ≥ 인원` 에서 실패 | 설정값 자체가 공용 와이파이를 감당하지 못한다. 한도를 고친다([§2.5](#25-공용-와이파이-환경-검증-반드시-본다)) |
+| 부하 테스트가 `§1. IP 분산 기준선` 을 건너뛴다 | **정상이다.** `trusted-proxies` 가 비어 XFF 가 무시되므로 헤더로 IP 를 나눌 수 없다([SPEC §8.7](SPEC.md)) |
 | 통합 테스트가 `대사 상태 정상` 에서 실패 | Redis 장애 훈련 후 잔여 데이터일 가능성이 높다. [§4.5](#45-훈련-뒤-정리) 로 정리하고 다시 돌린다 |
 | Gradle 이 이상하게 굴 때 | `.\gradlew.bat --stop` → 다시 실행. 그래도 안 되면 `.\gradlew.bat clean build` |
 

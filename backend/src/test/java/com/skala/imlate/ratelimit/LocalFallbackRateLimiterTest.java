@@ -26,6 +26,7 @@ class LocalFallbackRateLimiterTest {
         return new RateLimitProperties(true, true,
                 new RateLimitProperties.Rule(120, 120, 60),
                 new RateLimitProperties.Rule(3, 3, 60),
+                new RateLimitProperties.Rule(2, 2, 60),
                 new RateLimitProperties.Rule(40, 40, 60),
                 List.of(), fallbackPermitsPerMinute);
     }
@@ -113,6 +114,23 @@ class LocalFallbackRateLimiterTest {
         assertThat(limiter.tryConsume("g", global, WINDOW_START).allowed()).isTrue();
         assertThat(limiter.tryConsume("g", global, WINDOW_START + 1).allowed()).isTrue();
         assertThat(limiter.tryConsume("g", global, WINDOW_START + 2).allowed()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Redis 장애 중에도 개인 버킷(register-person) 규칙이 그대로 적용된다")
+    void 개인_버킷_규칙도_폴백에서_적용된다() {
+        RateLimitProperties properties = properties(1200);
+        LocalFallbackRateLimiter limiter = new LocalFallbackRateLimiter(properties);
+        RateLimitProperties.Rule person = properties.registerPerson();
+        String key = RateLimitScope.REGISTER_PERSON.bucketKey("0123456789abcdef");
+
+        assertThat(limiter.tryConsume(key, person, WINDOW_START).allowed()).isTrue();
+        assertThat(limiter.tryConsume(key, person, WINDOW_START + 1).allowed()).isTrue();
+        // 폴백 상한(1200)이 아니라 개인 규칙(2)이 적용되어야 한다.
+        assertThat(limiter.tryConsume(key, person, WINDOW_START + 2).allowed()).isFalse();
+        // 다른 사람(다른 해시)은 영향을 받지 않는다.
+        assertThat(limiter.tryConsume(RateLimitScope.REGISTER_PERSON.bucketKey("fedcba9876543210"),
+                person, WINDOW_START + 2).allowed()).isTrue();
     }
 
     @Test

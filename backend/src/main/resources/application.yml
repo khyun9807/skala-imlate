@@ -201,24 +201,71 @@ imlate:
       from-name: "${IMLATE_SES_FROM_NAME:기숙사 야간복귀 시스템}"
       configuration-set: "${IMLATE_SES_CONFIGURATION_SET:}"
 
-  # Rate limit (R14) — 200명 규모 기준 기본값
+  # ---------------------------------------------------------------------
+  # Rate limit (R14) — 기숙사 공용 와이파이(NAT) 200명 기준
+  #
+  # 전제: 교육생 전원이 기숙사 공용 와이파이 한 회선을 쓴다 = 서버에서 보면 공인 IP 가 1개다.
+  #       그래서 "IP 당 N회" 를 사람 단위 제한으로 쓰면 N+1번째 학생부터 429 가 되고,
+  #       하필 22:00 마감 직전에 정상 사용자가 막힌다(실서비스 불가).
+  #
+  # 해결: 버킷 축을 둘로 나눈다.
+  #   · IP 축(global/register/lookup) — 한 회선에서의 비정상 폭주(스크립트·DDoS)만 막는 굵은 그물.
+  #   · 사람 축(register-person)      — 요청 본문의 "반|이름|호수" 해시 기준. 도배는 여기서 막는다.
+  # ---------------------------------------------------------------------
   rate-limit:
     enabled: ${IMLATE_RATE_LIMIT_ENABLED:true}
     fail-open: ${IMLATE_RATE_LIMIT_FAIL_OPEN:true}
+
+    # [IP] 모든 /api 요청. 200명 × 6회/분 ≈ 1,200
+    #   (등록 창 조회 1 + 요약 1 + 앱 전환 시 재조회 1~2 + 등록 1~2)
+    #   이 값을 넘는 트래픽은 사람이 아니라 스크립트다.
     global:
-      capacity: 120
-      refill-tokens: 120
-      refill-period-seconds: 60
+      capacity: ${IMLATE_RATE_LIMIT_GLOBAL_CAPACITY:1200}
+      refill-tokens: ${IMLATE_RATE_LIMIT_GLOBAL_REFILL:1200}
+      refill-period-seconds: ${IMLATE_RATE_LIMIT_GLOBAL_PERIOD:60}
+
+    # [IP] 등록 API. 200명 × 1.5회 = 300
+    #   1.5회는 "오타 수정 후 재제출 / 새로고침 후 재시도" 여유다.
+    #   200~400 중 300 을 고른 이유: 400 은 회선 폭주 방어가 느슨해지고, 200 은 재시도 여유가 0 이라
+    #   마감 직전 동시 재시도에서 정상 사용자가 막힐 수 있다. 개인 도배는 아래 register-person 이 막으므로
+    #   이 값은 "사람 수 × 재시도"만 감당하면 된다.
     register:
-      capacity: 8
-      refill-tokens: 8
-      refill-period-seconds: 60
+      capacity: ${IMLATE_RATE_LIMIT_REGISTER_CAPACITY:300}
+      refill-tokens: ${IMLATE_RATE_LIMIT_REGISTER_REFILL:300}
+      refill-period-seconds: ${IMLATE_RATE_LIMIT_REGISTER_PERIOD:60}
+
+    # [사람] 같은 사람(반|이름|호수)의 등록 시도. 10회/분 (SPEC §8.6)
+    #   정상 사용자는 1~3회면 끝난다(성공 / 오타 수정 / 결과 재확인).
+    #   통신 오류 재시도까지 넉넉히 잡아도 10회이며, 분당 10회를 넘기면 사람이 아니라 스크립트다.
+    #   반드시 register(IP) 한도보다 작아야 한다 — 같으면 개인 도배를 방치하는 셈이다.
+    #   버킷 키는 개인정보 평문이 아니라 HMAC-SHA256 앞 32자다(PersonKeyResolver 주석 참고).
+    register-person:
+      capacity: ${IMLATE_RATE_LIMIT_REGISTER_PERSON_CAPACITY:10}
+      refill-tokens: ${IMLATE_RATE_LIMIT_REGISTER_PERSON_REFILL:10}
+      refill-period-seconds: ${IMLATE_RATE_LIMIT_REGISTER_PERSON_PERIOD:60}
+
+    # [IP] 사감 조회 API. 40 → 120 으로 올린다.
+    #   사용자는 사감 2명뿐이지만 이 버킷도 결국 IP 축이다. 사감 둘이 같은 사무실/기숙사 회선을
+    #   쓰면 하나의 버킷을 나눠 쓰게 되므로, "사람 수 × 조작 횟수"로 잡으면 이번에 고친 것과
+    #   똑같은 실수를 반복하게 된다. 조회·검색·새로고침·인쇄를 반복해도 닿지 않을 값으로 둔다.
+    #   (링크 남용 방지는 조회 토큰 자체와 TTL 이 담당한다)
     lookup:
-      capacity: 40
-      refill-tokens: 40
-      refill-period-seconds: 60
+      capacity: ${IMLATE_RATE_LIMIT_LOOKUP_CAPACITY:120}
+      refill-tokens: ${IMLATE_RATE_LIMIT_LOOKUP_REFILL:120}
+      refill-period-seconds: ${IMLATE_RATE_LIMIT_LOOKUP_PERIOD:60}
+
+    # 신뢰 프록시(IP 또는 IPv4 CIDR). 기본은 "아무도 신뢰하지 않음".
+    #   비어 있으면 X-Forwarded-For 를 아예 보지 않고 remoteAddr 만 쓴다.
+    #   XFF 는 누구나 붙일 수 있는 헤더라, 무조건 신뢰하면 요청마다 다른 값을 넣어
+    #   IP 버킷을 무한히 만들어 내는 우회가 가능하다. 프록시 뒤에 둘 때만 그 프록시 주소를 넣는다.
     trusted-proxies: []
-    local-fallback-permits-per-minute: 120
+
+    # Redis 장애 시 쓰는 인메모리 폴백의 분당 상한(키 1개 기준). global 과 같은 수준으로 맞춘다.
+    #   폴백 리미터는 모든 규칙에 min(규칙 한도, 이 값)을 적용한다. 따라서 이 값이 작으면
+    #   Redis 가 죽는 순간 global/register 한도가 통째로 이 값으로 줄어들어
+    #   공용 와이파이 전체가 막힌다 — 이번에 고친 결함이 장애 중에 그대로 되살아나는 셈이다.
+    #   (register-person=10 처럼 이보다 작은 규칙은 규칙 값이 그대로 유지된다)
+    local-fallback-permits-per-minute: ${IMLATE_RATE_LIMIT_LOCAL_FALLBACK_PER_MINUTE:1200}
 
   # 통계 (R15)
   stats:

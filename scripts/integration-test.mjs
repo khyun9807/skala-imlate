@@ -14,6 +14,8 @@
  * 옵션
  *   --base-url <URL>        기본 http://localhost:8080
  *   --admin-key <KEY>       기본 local-dev-admin-key (application-local.yml 값)
+ *   --cohort <N>            교육생 규모. rate limit 설정이 이 인원을 감당하는지 검사한다. 기본 200
+ *   --spam <N>              동일인 도배 최대 시도 수(429 가 나오면 조기 종료). 기본 40
  *   --mysql <컨테이너명>     기본 imlate-mysql
  *   --redis <컨테이너명>     기본 imlate-redis
  *   --db-user/--db-pass/--db-name   기본 imlate/imlate/imlate
@@ -34,11 +36,19 @@ const arg = (name, fallback) => {
   const i = argv.indexOf(`--${name}`)
   return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : fallback
 }
+const intArg = (name, fallback) => {
+  const v = Number.parseInt(arg(name, String(fallback)), 10)
+  return Number.isFinite(v) && v > 0 ? v : fallback
+}
 const flag = (name) => argv.includes(`--${name}`)
 
 const BASE = arg('base-url', 'http://localhost:8080').replace(/\/$/, '')
 const API = `${BASE}/api/v1`
 const ADMIN_KEY = arg('admin-key', 'local-dev-admin-key')
+/** 교육생 규모(R14 기준). rate limit 한도가 이 인원을 감당하는지 설정 단계에서 검사한다. */
+const COHORT = intArg('cohort', 200)
+/** 동일인 도배 시나리오의 최대 시도 수. 429 가 나오면 그 즉시 멈춘다. */
+const SPAM_MAX = intArg('spam', 40)
 const MYSQL_CONTAINER = arg('mysql', 'imlate-mysql')
 const REDIS_CONTAINER = arg('redis', 'imlate-redis')
 const DB_USER = arg('db-user', 'imlate')
@@ -97,10 +107,35 @@ const mysql = (sql) =>
 
 const redis = (...args) => docker(REDIS_CONTAINER, ['redis-cli', ...args])
 
+const redisKeys = (pattern) =>
+  redis('--scan', '--pattern', pattern).split('\n').map((k) => k.trim()).filter(Boolean)
+
 const redisDelPattern = (pattern) => {
-  const keys = redis('--scan', '--pattern', pattern).split('\n').filter(Boolean)
+  const keys = redisKeys(pattern)
   if (keys.length) redis('del', ...keys)
   return keys.length
+}
+
+/**
+ * 기동 중인 앱의 **실제 설정값**을 읽는다(local 프로파일이 /actuator/env 를 열어 둔다).
+ * 여러 이름을 주면 순서대로 시도하고 처음 찾은 값을 돌려준다. 못 읽으면 null.
+ *
+ * rate limit 한도를 스크립트에 하드코딩하지 않기 위한 장치다.
+ * (예전에는 "8" 이 박혀 있어서, 한도를 고쳐도 테스트가 같이 거짓말을 했다)
+ */
+async function envNumber(...names) {
+  for (const name of names) {
+    try {
+      const res = await fetch(`${BASE}/actuator/env/${encodeURIComponent(name)}`)
+      if (!res.ok) continue
+      const json = await res.json()
+      const n = Number(json?.property?.value)
+      if (Number.isFinite(n) && n > 0) return n
+    } catch {
+      /* actuator 가 닫혀 있으면 null 로 처리하고 동작 검증에 맡긴다 */
+    }
+  }
+  return null
 }
 
 /**
@@ -135,7 +170,42 @@ const walEntries = (date) => {
 const walPersonKeys = (entries) =>
   new Set(entries.map((e) => `${e.className}|${e.studentName}|${e.roomNumber}`))
 
-/** register 버킷을 비워 rate limit 에 걸리지 않고 다음 등록을 진행한다. */
+/** WAL 해시를 field(=walId) → entry 쌍으로 읽는다. 정리(HDEL)에는 field 가 필요하다. */
+const walFieldEntries = (date) => {
+  const raw = redis('hgetall', `imlate:wal:${date}`)
+  if (!raw) return []
+  const lines = raw.split('\n')
+  const out = []
+  for (let i = 0; i + 1 < lines.length; i += 2) {
+    const field = lines[i].trim()
+    try {
+      out.push({ field, entry: JSON.parse(lines[i + 1]) })
+    } catch {
+      out.push({ field, entry: null })
+    }
+  }
+  return out
+}
+
+/**
+ * 조건에 맞는 WAL 항목을 지운다. 어떤 섹션이 임시로 만든 등록을 흔적 없이 되돌릴 때 쓴다.
+ * (뒤 섹션들이 "정확히 N건" 을 단언하므로, 중간 섹션은 자기 쓰레기를 스스로 치워야 한다)
+ */
+const purgeWal = (date, predicate) => {
+  const fields = walFieldEntries(date).filter((w) => predicate(w.entry)).map((w) => w.field)
+  for (let i = 0; i < fields.length; i += 100) {
+    const chunk = fields.slice(i, i + 100)
+    if (chunk.length) redis('hdel', `imlate:wal:${date}`, ...chunk)
+  }
+  return fields.length
+}
+
+/**
+ * rate limit 버킷을 **전부** 비워 다음 등록이 한도에 걸리지 않게 한다.
+ *
+ * 버킷은 이제 IP 버킷(`imlate:rl:{scope}:{ip}`)과 개인 버킷(개인 식별자 해시)의 2단이다.
+ * 둘 다 `imlate:rl:` 네임스페이스 아래 있으므로 이 패턴 하나로 함께 지워진다.
+ */
 const clearRateLimit = () => redisDelPattern('imlate:rl:*')
 
 const admin = (path, method = 'POST') => req(method, path, { headers: { 'X-Admin-Key': ADMIN_KEY } })
@@ -231,17 +301,125 @@ async function run() {
   }
 
   // ---------------------------------------------------------------- 3
-  section('3. Rate limiting (R14) — register 규칙 8회/분')
-  const over = await register('9반', '과다요청', '999')
-  check('한도 초과 요청 429 차단', over.status === 429, `status=${over.status}`)
-  check('code = RATE_LIMITED', over.json?.code === 'RATE_LIMITED', over.text.slice(0, 100))
-  check('Retry-After 헤더', !!over.headers.get('retry-after'))
-  check('X-RateLimit-Limit 헤더', !!over.headers.get('x-ratelimit-limit'))
-  check('X-RateLimit-Remaining 헤더', over.headers.get('x-ratelimit-remaining') !== null)
-  info(`차단된 요청은 DB 에 저장되지 않아야 합니다.`)
-  check('차단된 요청은 저장되지 않음',
-    Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE student_name='과다요청'`)) === 0)
+  section('3. Rate limiting (R14) — IP 버킷 + 개인 식별자 버킷 2단')
+  info('기숙사 공용 와이파이(NAT) 뒤에서는 교육생 전원이 같은 공인 IP 하나로 보인다.')
+  info('그래서 IP 버킷은 "한 회선의 대량 폭주 차단" 전용으로 격하하고,')
+  info('"같은 사람의 도배"는 요청 본문에서 뽑은 개인 식별자 버킷이 막는다. (SPEC §8)')
+  info('※ 이 섹션은 자기가 만든 등록(호수 RL*)을 끝에서 스스로 지운다 — 뒤 섹션의 건수 단언을 지키기 위함.')
+
+  // 3-0) 설정값 검사 — 요청을 보내지 않고도 알 수 있는 결함을 여기서 먼저 잡는다.
+  //      한도를 스크립트에 하드코딩하지 않고 기동 중인 앱에서 읽는다.
+  const capGlobal = await envNumber('imlate.rate-limit.global.capacity')
+  const capRegister = await envNumber('imlate.rate-limit.register.capacity')
+  const capPerson = await envNumber(
+    'imlate.rate-limit.register-person.capacity',
+    'imlate.rate-limit.registerPerson.capacity',
+    'imlate.rate-limit.person.capacity')
+  info(`적용 중: global(IP) ${capGlobal ?? '?'}/분 · register(IP) ${capRegister ?? '?'}/분`
+    + ` · register(개인) ${capPerson ?? '?'}/분`)
+  if (capRegister === null || capGlobal === null) {
+    info('※ /actuator/env 를 읽지 못해 설정값 검사는 건너뜁니다(local 프로파일인지 확인하세요).')
+  } else {
+    check(`register(IP) 한도(${capRegister}) ≥ 교육생 규모(${COHORT})`, capRegister >= COHORT,
+      '공용 와이파이 뒤에서 전원이 IP 하나를 공유하므로, 이 값이 인원보다 작으면 정상 사용자가 막힌다.')
+    check(`global(IP) 한도(${capGlobal}) ≥ 교육생 규모 × 2 (${COHORT * 2})`, capGlobal >= COHORT * 2,
+      '학생 한 명이 최소 2회(마감 조회 + 등록) 호출한다.')
+  }
+  if (capPerson === null) {
+    info('※ 개인 버킷 설정 프로퍼티를 찾지 못했습니다. 아래 3-2 동작 검증이 판정 기준입니다.')
+  } else {
+    check(`register(개인) 한도(${capPerson}) < register(IP) 한도(${capRegister ?? '?'})`,
+      capRegister !== null && capPerson < capRegister,
+      '개인 버킷이 IP 버킷만큼 크면 도배를 전혀 막지 못한다.')
+  }
+
+  // 3-1) ★ 같은 IP · 다른 사람 → 통과해야 한다 (이번에 고친 결함의 회귀 방지)
+  //      §2 에서 이미 8명이 같은 클라이언트로 등록했다. 예전 한도(register = IP당 8회/분)에서는
+  //      바로 이 다음 요청부터 429 가 났고, 그것이 "공용 와이파이에서 9번째 학생부터 막힌다"는
+  //      운영 불가 결함이었다. 여기가 그 회귀를 잡는 자리다.
+  const SAME_IP_OTHERS = [
+    ['9반', '동일IP타인1', 'RL901'],
+    ['9반', '동일IP타인2', 'RL902'],
+    ['9반', '동일IP타인3', 'RL903'],
+  ]
+  for (const [c, n, r] of SAME_IP_OTHERS) {
+    const res = await register(c, n, r)
+    check(`★ 같은 IP · 다른 사람 → 201 통과: ${n}`, res.status === 201,
+      `status=${res.status} — 429 라면 IP 하나로만 버킷을 만들고 있다(공용 와이파이에서 정상 사용자가 막힌다).`)
+  }
+
+  // 3-2) ★ 같은 IP · 같은 사람 반복 → 429 로 막혀야 한다 (개인 식별자 버킷)
+  const SPAM = { className: '9반', studentName: '도배사용자', roomNumber: 'RL904' }
+  let spamFirst = null
+  let spamBlocked = null
+  let spamAttempts = 0
+  let spamAccepted = 0
+  let spamLastStatus = 0
+  for (let i = 0; i < SPAM_MAX; i++) {
+    const res = await req('POST', '/registrations', { body: SPAM })
+    spamAttempts++
+    spamLastStatus = res.status
+    if (!spamFirst) spamFirst = res
+    if (res.status === 429) {
+      spamBlocked = res
+      break
+    }
+    if (res.status === 200 || res.status === 201) spamAccepted++
+    else break // 예상 밖 응답이면 더 보내지 않는다(아래 단언이 실패로 드러낸다)
+  }
+  check('★ 같은 IP · 같은 사람 반복 → 429 차단', !!spamBlocked,
+    `${spamAttempts}회 보냈으나 429 없음(통과 ${spamAccepted}건, 마지막 status=${spamLastStatus})`
+    + ' — 개인 식별자 버킷이 동작하지 않는다.')
+  check('첫 요청은 반드시 통과한다 (정상 사용자를 막지 않는다)', spamFirst?.status === 201,
+    `status=${spamFirst?.status}`)
+  if (capPerson !== null) {
+    check(`통과 건수(${spamAccepted})가 개인 한도(${capPerson}) 이하`, spamAccepted <= capPerson + 1,
+      `통과=${spamAccepted} 한도=${capPerson} (+1 은 시험 중 리필 여유)`)
+  }
+  if (spamBlocked) {
+    check('code = RATE_LIMITED', spamBlocked.json?.code === 'RATE_LIMITED', spamBlocked.text.slice(0, 100))
+    check('Retry-After 헤더', !!spamBlocked.headers.get('retry-after'))
+    check('X-RateLimit-Limit 헤더', !!spamBlocked.headers.get('x-ratelimit-limit'))
+    check('X-RateLimit-Remaining 헤더', spamBlocked.headers.get('x-ratelimit-remaining') !== null)
+  }
+  check('도배해도 DB 행은 1건 (멱등 + 차단된 요청은 저장되지 않음)',
+    Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE student_name='도배사용자'`)) === 1)
+  const spamWal = walFieldEntries(TODAY).filter((w) => w.entry?.roomNumber === 'RL904').length
+  check('차단된 요청은 WAL 에도 남지 않음 (WAL 항목 수 == 통과 건수)',
+    spamWal === spamAccepted, `wal=${spamWal} 통과=${spamAccepted}`)
+
+  // 3-3) ★ X-Forwarded-For 위조로 리미터를 우회할 수 없어야 한다.
+  //      로컬은 imlate.rate-limit.trusted-proxies 가 비어 있으므로 XFF 를 신뢰하지 않는다.
+  //      (운영에서는 ALB 가 이 헤더를 덮어쓰지만, 신뢰 목록이 비면 어차피 무시한다)
+  const FORGED_IP = '203.0.113.77' // RFC 5737 문서용 대역 — 실제 주소와 충돌하지 않는다
+  const forged = await req('POST', '/registrations', {
+    body: SPAM,
+    headers: { 'X-Forwarded-For': FORGED_IP, 'X-Real-IP': FORGED_IP },
+  })
+  if (spamBlocked) {
+    check('★ X-Forwarded-For 를 위조해도 차단이 풀리지 않음 (429 유지)', forged.status === 429,
+      `status=${forged.status} — 위조 헤더로 새 버킷이 만들어졌다면 리미터를 우회할 수 있다는 뜻이다.`)
+  }
+  const forgedKeys = redisKeys(`imlate:rl:*:${FORGED_IP}`)
+  check('★ 위조 IP 로 만들어진 rate limit 버킷이 없음 (XFF 를 클라이언트 식별에 쓰지 않는다)',
+    forgedKeys.length === 0,
+    `${forgedKeys.join(', ')} — trusted-proxies 가 비어 있는데 XFF 를 신뢰하고 있다.`)
+
+  // 3-4) 이 섹션이 만든 임시 등록을 DB/WAL 에서 되돌린다(뒤 섹션의 "정확히 N건" 단언 보호).
+  const rlRows = Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE room_number LIKE 'RL%'`))
+  mysql(`DELETE FROM return_registration WHERE room_number LIKE 'RL%'`)
+  const rlWal = purgeWal(TODAY, (e) => String(e?.roomNumber ?? '').startsWith('RL'))
+
+  // 등록 통계 카운터도 함께 되돌린다.
+  // 통계는 RegistrationCreatedEvent 로 INCR 되므로 DB 행을 지워도 자동으로 줄지 않는다.
+  // 이걸 빼먹으면 §12 의 "오늘 등록 수 = 13" 이 이 섹션이 만든 임시 등록만큼 부풀어 실패한다.
+  if (rlRows > 0) {
+    redis('decrby', `imlate:stats:reg:${TODAY}`, String(rlRows))
+    redis('decrby', 'imlate:stats:reg:total', String(rlRows))
+  }
+
   clearRateLimit()
+  info(`섹션 3 임시 데이터 정리: DB ${rlRows}건, WAL ${rlWal}건, 통계 카운터 ${rlRows} 차감 — 이후 단언은 §2 의 8건 기준 그대로.`)
 
   // ---------------------------------------------------------------- 4
   section('4. 입력 검증')
@@ -260,6 +438,7 @@ async function run() {
 
   // WAL append 는 정규화·검증을 **통과한 뒤에만** 일어난다(R7 쓰기 순서 2→3단계).
   // 잘못된 입력이나 429 로 막힌 요청이 WAL 을 오염시키면 대사가 유령 인원을 복구하게 된다.
+  // (§3 이 만든 RL* 항목은 §3-4 에서 스스로 지웠으므로, 여기 기준값은 여전히 §2 의 8건이다)
   const walAfterInvalid = Number(redis('hlen', `imlate:wal:${TODAY}`))
   check('검증 실패·429 요청은 WAL 에 남지 않음 (정상 등록 8건 그대로)',
     walAfterInvalid === 8, `hlen=${walAfterInvalid}`)

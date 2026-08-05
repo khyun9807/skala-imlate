@@ -44,8 +44,14 @@ spring:
 
 server:
   port: ${IMLATE_SERVER_PORT:8080}
-  # ALB 뒤에서 X-Forwarded-* 헤더를 신뢰한다.
-  forward-headers-strategy: framework
+  # X-Forwarded-* 는 스프링(ForwardedHeaderFilter)이 아니라 ClientIpResolver 가 직접 해석한다.
+  #   framework 전략은 "누가 보냈든" XFF 첫 IP 를 remoteAddr 로 덮어쓰고 XFF 헤더를 지워 버린다.
+  #   그러면 imlate.rate-limit.trusted-proxies 로 하는 신뢰 판별이 무력화되고,
+  #   공격자가 헤더를 바꿔 가며 IP 버킷을 무한히 만들어 리미터를 우회할 수 있다.
+  #   nginx 는 같은 호스트에서 프록시하므로 remoteAddr 는 항상 127.0.0.1 이고,
+  #   진짜 클라이언트 IP 는 아래 trusted-proxies 판별을 거쳐 XFF 에서 얻는다.
+  #   ※ 절대 URL 생성(리다이렉트 등)이 필요해지면 그때 다시 검토할 것 — 현재 이 API 는 만들지 않는다.
+  forward-headers-strategy: none
 
 # 운영에서는 노출을 최소화한다(헬스체크만 공개).
 management:
@@ -110,6 +116,13 @@ imlate:
   rate-limit:
     enabled: true
     fail-open: true
+    # 신뢰 프록시 = 같은 호스트의 nginx. 이 대역에서 온 요청만 X-Forwarded-For 를 채택한다.
+    #   (버킷·한도 기본값은 application.yml 에 근거와 함께 정의되어 있다)
+    #   ※ 앞단에 ALB 를 다시 붙이면 여기에 ALB 가 나가는 VPC 서브넷 대역(예: "10.0.0.0/16")을
+    #     추가해야 한다. 넣지 않으면 ALB IP 하나가 모든 교육생의 버킷이 되어 전원이 막힌다.
+    #   ※ 반대로 필요 이상으로 넓은 대역(0.0.0.0/0 등)을 넣으면 헤더 위조로 리미터가 무력화된다.
+    trusted-proxies:
+      - "127.0.0.1/32"
 
   stats:
     enabled: true

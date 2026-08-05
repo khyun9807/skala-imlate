@@ -88,3 +88,10 @@ imlate:
   rate-limit:
     enabled: true
     fail-open: true
+    # 로컬은 프록시가 없으므로 아무것도 신뢰하지 않는다(= X-Forwarded-For 무시).
+    #   scripts/integration-test.mjs §3-3 이 "위조 XFF 로 만들어진 버킷이 없음"을 단언하므로
+    #   이 목록은 반드시 비어 있어야 한다.
+    #   그 대신 scripts/load-test.mjs 는 사전 점검에서 XFF 신뢰 여부를 감지해
+    #   "IP 분산 기준선" 단계를 건너뛴다(어차피 실사용 환경은 단일 IP 다).
+    #   IP 를 흩뿌리는 부하 시험이 꼭 필요하면 이 목록에 "127.0.0.1/32" 를 임시로 넣는다.
+    trusted-proxies: []

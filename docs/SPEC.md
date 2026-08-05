@@ -157,6 +157,7 @@ public record EmailProperties(String provider, // "ses" | "noop"
 @ConfigurationProperties(prefix = "imlate.rate-limit")
 public record RateLimitProperties(boolean enabled, boolean failOpen,
                                   Rule global, Rule register, Rule lookup,
+                                  Rule registerPerson,   // 개인 식별자 버킷 (§8.2 3단)
                                   List<String> trustedProxies, int localFallbackPermitsPerMinute) {
     public record Rule(long capacity, long refillTokens, long refillPeriodSeconds) {}
 }
@@ -240,9 +241,15 @@ public class AdminKeyGuard {
 ```java
 package com.skala.imlate.common.web;
 public final class ClientIpResolver {
-    public static String resolve(HttpServletRequest request);  // X-Forwarded-For 첫 IP → 없으면 remoteAddr
+    /**
+     * trusted-proxies 가 비어 있으면 X-Forwarded-For / X-Real-IP 를 **무시**하고 remoteAddr 만 쓴다.
+     * 목록이 있으면 remoteAddr 이 신뢰 프록시일 때만 XFF 를 보고, 체인 오른쪽에서 신뢰 프록시를
+     * 걷어낸 첫 주소를 클라이언트 IP 로 삼는다. 판별 실패 시 "unknown". 자세한 규칙은 §8.7.
+     */
+    public static String resolve(HttpServletRequest request);
 }
 ```
+> 예전 규칙("XFF 첫 IP 를 무조건 사용")은 **헤더 위조로 rate limit 을 우회할 수 있어 폐기**했다(§8.7).
 
 ### 4.4 Redis 설정 (`common.config.RedisConfig`)
 
@@ -651,21 +658,169 @@ GET /api/v1/stats/daily?from=&to=&token=                   → List<DailyStatVie
 
 패키지 `com.skala.imlate.ratelimit`
 
+### 8.0 왜 IP 단독 버킷을 버렸는가 (배경 — 먼저 읽을 것)
+
+교육생 약 200명은 **기숙사 공용 와이파이**로 등록한다. NAT 뒤라 **전원이 공인 IP 하나를 공유**한다.
+그런데 초기 구현은 버킷을 `imlate:rl:{scope}:{clientIp}` 로만 만들고 등록 한도를 **IP당 8회/분**으로 두었다.
+
+> 결과: 같은 와이파이에서 **9번째 학생부터 429**. 22:00 마감 직전 몰리는 시간대에
+> 정확히 최악의 타이밍으로 정상 사용자가 차단된다. **운영이 불가능한 결함이었다.**
+
+부하 테스트가 이걸 잡지 못한 이유도 함께 기록해 둔다 — 요청마다 다른 `X-Forwarded-For` 를 붙여
+200명을 **서로 다른 IP** 로 시뮬레이션했기 때문이다. **기본 시나리오가 실제 사용 환경과 정반대**였다.
+(자세한 교훈: [docs/LOCAL-TESTING.md §2.5](LOCAL-TESTING.md))
+
+**결정 — 둘 다 적용한다.**
+
+1. **IP 한도를 대폭 상향**한다. IP 버킷은 "정상 사용자 구분"에서 손을 떼고
+   **한 회선에서의 대량 폭주(DDoS) 차단** 전용으로 격하한다.
+2. **개인 식별자 기준 버킷을 추가**한다. 같은 사람이 도배하는 것은 여전히 막는다.
+   개인 키는 요청 본문에서 나오므로 **등록(register) 스코프에만** 적용된다.
+
+한 줄 요약: **회선은 IP 가, 사람은 personKey 가 막는다. 옆자리 학생을 막는 것은 둘 다 아니다.**
+
+### 8.1 토큰 버킷 엔진
+
 - **Redis Lua 토큰 버킷**(원자적, 1 RTT). 스크립트 파일:
   `src/main/resources/redis/rate_limit_token_bucket.lua`
   KEYS[1]=버킷키, ARGV=capacity, refillTokens, refillPeriodMs, nowMs, requested
   반환: `{allowed(0|1), remaining, retryAfterMs}` — 키 TTL 은 가득 차는 시간으로 설정.
 - `RedisRateLimiter implements RateLimiter` / `LocalFallbackRateLimiter`(Caffeine 미사용, `ConcurrentHashMap` +
   고정 윈도우, Redis 장애 시 사용) — `fail-open=true` 면 Redis 오류 시 로컬 리미터로 강등, `false` 면 429.
-- 적용 지점: `RateLimitInterceptor`(HandlerInterceptor) 를 `/api/**` 에 등록.
-  스코프 결정: `POST /api/v1/registrations` → `register` 규칙, `/api/v1/lookup` → `lookup` 규칙, 그 외 `global`.
-  키: `imlate:rl:{scope}:{clientIp}`.
-- 응답 헤더: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`(epoch sec),
-  차단 시 `Retry-After`(sec) + 429 + `ErrorResponse(code=RATE_LIMITED)`.
-- 성능: Redis 호출 1회, 스크립트는 `DefaultRedisScript` 로 SHA 캐싱. 인터셉터에서 예외를 절대 전파하지 않는다.
-- 기본값(200명 규모 기준): global `capacity=120, refill=120/60s`,
-  register `capacity=8, refill=8/60s`, lookup `capacity=40, refill=40/60s`.
-- 신뢰 프록시(ALB) 뒤에서는 `X-Forwarded-For` 첫 IP 사용(`ClientIpResolver`).
+- 스크립트는 `DefaultRedisScript` 로 SHA 캐싱.
+- **리미터 내부에서 발생한 어떤 예외도 요청을 실패시키지 않는다.** rate limit 은 부가 기능이며
+  서비스 가용성을 해쳐서는 안 된다(§14). 이 원칙은 개인 버킷에도 그대로 적용된다.
+
+### 8.2 버킷 2단 — 키와 적용 순서
+
+| 단 | 스코프 | 버킷 키 | 적용 대상 | 막는 것 |
+|---|---|---|---|---|
+| 1 | `global` | `imlate:rl:global:{clientIp}` | 모든 `/api/**` | 한 회선의 대량 폭주 |
+| 2 | `register` | `imlate:rl:register:{clientIp}` | `POST /api/v1/registrations` | 한 회선의 등록 폭주 |
+| 2 | `lookup` | `imlate:rl:lookup:{clientIp}` | `/api/v1/lookup…` | 조회 링크 남용(PII 대량 수집) |
+| 3 | `register-person` | `imlate:rl:register-person:{personHash}` | `POST /api/v1/registrations` | **같은 사람의 도배** |
+
+적용 순서는 `1 → 2 → 3` 이며 **앞 단계에서 막히면 뒤 단계는 호출하지 않는다**(단락 평가).
+`OPTIONS`(CORS preflight)와 `/actuator/**` 는 전부 대상에서 제외한다.
+
+### 8.3 개인 식별자(personKey)와 해시
+
+```
+personKey  = normalize(className) + "|" + normalize(studentName) + "|" + normalize(roomNumber)
+             normalize = 앞뒤 공백 제거 + 연속 공백 1칸 축약
+                         → RegistrationService 의 정규화를 그대로 재사용한다(복붙 금지)
+personHash = hex( SHA-256(personKey) ) 의 앞 16자 (= 64비트)
+bucketKey  = "imlate:rl:register-person:" + personHash
+```
+
+- **정규화가 먼저다.** `" 1반 "` 과 `"1반"` 이 다른 버킷을 쓰면 공백만 바꿔 가며 우회할 수 있다.
+  등록 멱등성 판정(§5.2 `WalEntry.personKey()`)과 **같은 정규화 규칙**을 쓴다.
+  두 곳이 갈라지지 않도록 `RegistrationService` 의 정규화 메서드를 **재사용**한다.
+  (등록 멱등 키와 달리 날짜는 넣지 않는다 — 버킷 TTL 이 분 단위라 의미가 없다.)
+- **왜 해시해서 넣는가 — 개인정보 때문이다.**
+  Redis 키는 `KEYS`/`SCAN`/`MONITOR` 결과, 슬로우로그, 모니터링 대시보드, RDB/AOF 덤프,
+  운영자의 `redis-cli` 화면에 **그대로 노출**된다. 원문을 키에 박으면
+  *"누가 몇 시에 복귀 등록을 시도했는지"가 버킷 이름만으로 드러난다*.
+  버킷은 사람을 **구분**하기만 하면 되고 원문을 다시 읽을 일이 없으므로 되돌릴 수 있을 필요가 없다.
+  부수 효과로 키 길이가 고정되어 메모리 사용량이 예측 가능해지고, 한글·`|`·공백이 섞인 키를
+  운영 도구에서 다루는 번거로움도 사라진다.
+- **16자(64비트)로 자르는 이유** — 200명 규모에서 충돌 확률이 무시할 수준이고,
+  설령 충돌해도 결과는 "두 사람이 분당 한도를 나눠 쓴다" 정도라 **안전한 방향으로 실패**한다.
+- **알려진 한계(의도적)** — 입력 공간이 작아(반·이름·호수 조합) 평문 SHA-256 은 사전 공격으로
+  되돌릴 수 있다. 즉 이 해시는 **익명화가 아니라 "덤프를 열었을 때 눈에 안 띄게" 하는 수준**이다.
+  버킷은 TTL 이 분 단위인 임시 키이고 Redis 자체가 사설 서브넷에 있으므로 여기까지로 둔다.
+  더 강한 보장이 필요해지면 `imlate.lookup.token-secret` 을 키로 쓰는 HMAC-SHA256 으로 바꾼다
+  (키 포맷만 바뀌고 로직은 그대로다).
+- 개인 버킷 차단은 **WAL append(§5.2 3단계)보다 반드시 앞에서** 일어나야 한다.
+  차단된 요청이 WAL 에 남으면 22:10 대사가 유령 인원을 DB 로 복구한다.
+- 본문에서 개인 키를 못 만들면(본문 없음·JSON 파손·필드 누락) **개인 버킷 검사를 건너뛴다.**
+  리미터가 정상 등록을 막는 것보다 낫고, 잘못된 본문은 어차피 컨트롤러 `@Valid` 에서 400 이 된다.
+
+### 8.4 적용 지점 (본문을 읽어야 한다는 제약)
+
+- 1·2단(IP)은 `RateLimitInterceptor`(HandlerInterceptor)를 `/api/**` 에 등록해 처리한다.
+- 3단(개인)은 **요청 본문이 필요**하다. 그런데 인터셉터에서 `request.getInputStream()` 을 읽어 버리면
+  컨트롤러가 본문을 다시 읽지 못한다. 그래서 **등록 요청에 한해** 본문을 캐싱하는 필터를 앞에 둔다.
+
+```java
+RegistrationBodyCachingFilter   // POST /api/v1/registrations 에만 적용. 본문을 바이트로 캐싱
+CachedBodyHttpServletRequest    // 캐시된 본문을 몇 번이든 다시 읽게 해 주는 래퍼
+PersonKeyResolver               // 캐시된 본문 → personHash (만들 수 없으면 null)
+```
+
+- **캐싱 대상을 등록 경로로 좁히는 것이 중요하다.** 모든 요청의 본문을 메모리에 들고 있으면
+  그 자체가 공격 표면이 된다. 등록 본문은 수십 바이트라 부담이 없다.
+- 3단은 **1·2단(IP)을 통과한 등록 요청에서만** 소비한다. 앞에서 막히면 개인 버킷은 건드리지 않는다.
+- 어디서 막든 **429 응답 계약은 동일해야 한다**(아래 §8.5). 개인 버킷 차단만 헤더가 빠지면 안 된다.
+  다만 사용자 문구는 스코프별로 다르게 준다 — 개인 버킷은
+  `"같은 정보로 너무 자주 등록을 시도했습니다. 잠시 후 다시 시도해 주세요."` 처럼
+  **왜 막혔는지 짐작할 수 있는 문구**여야 한다(회선 폭주와 도배는 사용자가 할 행동이 다르다).
+
+### 8.5 응답 계약
+
+- 모든 응답: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`(epoch sec)
+- 차단 시: HTTP **429** + `Retry-After`(sec) + `ErrorResponse(code=RATE_LIMITED)`
+- `X-RateLimit-Limit` 값은 **실제로 막은 규칙의 capacity** 를 싣는다(어느 단에서 막혔는지 구분 가능해야 한다).
+
+### 8.6 기본값과 그 근거 (200명 규모)
+
+| 규칙 | 기본값 | 이 숫자를 고른 근거 |
+|---|---|---|
+| `global` (IP) | `capacity=1200, refill=1200/60s` | 공용 와이파이 뒤 200명 × 1인당 분당 6회(등록 창 조회 1 + 요약 1 + 앱 전환 시 재조회 1~2 + 등록 1~2) ≈ 1200. 뒤집으면 **한 회선이 20 req/s 를 넘으면 사람이 아니라 스크립트로 본다**는 선언이다. |
+| `register` (IP) | `capacity=300, refill=300/60s` | 200명 × 1.5회 = 300. 1.5회는 "오타 수정 후 재제출 / 새로고침 후 재시도" 여유다. 200~400 중 300 을 고른 이유: 400 은 회선 폭주 방어가 느슨해지고, 200 은 재시도 여유가 0 이라 마감 직전 동시 재시도에서 정상 사용자가 막힐 수 있다. 개인 도배는 아래 `register-person` 이 막으므로 이 값은 "사람 수 × 재시도"만 감당하면 된다. **반드시 교육생 규모보다 커야 한다.** |
+| `register-person` (개인) | `capacity=5, refill=5/60s` | 정상 사용자는 1회(성공) 또는 2회(오타 수정)면 끝난다. 5회면 통신 오류 재시도까지 충분하고, **6번째부터 막히므로** 한 사람이 서버를 두드려 대는 것은 실질적으로 차단된다. |
+| `lookup` (IP) | `capacity=20, refill=20/60s` | 사용자는 사감 2명뿐이고 조회 화면은 진입 시 1회만 호출한다(자동 폴링 없음). 20회/분이면 3초에 한 번 새로고침하는 셈이라 사람 손으로는 닿지 않는다. 반대로 이 화면은 **200명의 이름·호수(PII)** 를 담고 있어, 조회 토큰이 유출됐을 때 **대량 수집 속도를 늦추는 것**이 이 버킷의 진짜 목적이다. 그래서 40 → 20 으로 오히려 낮췄다. |
+| `local-fallback-permits-per-minute` | `1200` | Redis 장애 시 쓰는 인메모리 폴백의 분당 상한. **`global` 과 같은 수준으로 맞춘다** — 이 값이 작으면 폴백으로 강등되는 순간 공용 와이파이 전체가 막힌다(예전 `120` 이 정확히 그랬다). |
+
+> **IP 축은 올리고 조회 축은 내렸다**는 점에 주의. 방향이 반대인 이유는 지키려는 것이 다르기 때문이다.
+> 등록은 *교육생 200명의 가용성*, 조회는 *그 200명의 개인정보*를 지킨다.
+
+**지켜야 하는 부등식** (설정만 보고도 결함을 잡을 수 있다. 두 검증 스크립트가 이 세 줄을 단언한다):
+
+```
+register(IP) 한도        ≥ 교육생 규모            (300 ≥ 200)
+global(IP)   한도        ≥ 교육생 규모 × 2        (1200 ≥ 400)
+register-person 한도     <  register(IP) 한도      (5 < 300 — 개인 버킷이 IP 만큼 크면 도배를 방치하는 것)
+```
+
+설정 프로퍼티(§4.1 `RateLimitProperties`)에 `register-person` 규칙이 추가된다.
+모든 한도는 환경변수로 덮을 수 있다(`IMLATE_RATE_LIMIT_*_CAPACITY` 등, §10).
+
+```yaml
+imlate:
+  rate-limit:
+    global:          { capacity: 1200, refill-tokens: 1200, refill-period-seconds: 60 }
+    register:        { capacity: 300,  refill-tokens: 300,  refill-period-seconds: 60 }
+    register-person: { capacity: 5,    refill-tokens: 5,    refill-period-seconds: 60 }
+    lookup:          { capacity: 20,   refill-tokens: 20,   refill-period-seconds: 60 }
+    trusted-proxies: []
+    local-fallback-permits-per-minute: 1200
+```
+
+### 8.7 클라이언트 IP 판별 — `trusted-proxies` 가 비면 XFF 를 신뢰하지 않는다
+
+`ClientIpResolver`(§4.3)는 `imlate.rate-limit.trusted-proxies` 에 따라 동작이 갈린다.
+
+| `trusted-proxies` | 동작 |
+|---|---|
+| **비어 있음(기본·로컬)** | `X-Forwarded-For` / `X-Real-IP` 를 **완전히 무시**하고 `remoteAddr` 만 쓴다 |
+| 목록이 있음(운영, ALB 사설 대역) | `remoteAddr` 이 그 목록에 속할 때만 XFF 를 신뢰하고, **체인 오른쪽에서부터 신뢰 프록시를 걷어낸 첫 주소**를 클라이언트 IP 로 삼는다 |
+
+- **왼쪽 첫 IP 를 그대로 쓰면 안 된다.** 클라이언트가 헤더를 통째로 위조해 요청마다 다른 IP 를
+  주장하면 버킷을 무한히 만들 수 있어 리미터가 사실상 무력해진다.
+- 판별 실패 시 `"unknown"` 을 식별자로 쓴다 — 미확인 클라이언트끼리 버킷을 공유시켜 우회 통로를 만들지 않는다.
+- 로컬은 빈 목록이 기본이므로 **위조 헤더로 리미터를 우회할 수 없다.**
+  `scripts/integration-test.mjs` §3-3 이 "위조 IP 로 만들어진 버킷이 존재하지 않는다"를 단언한다.
+
+### 8.8 성능 (R14 — "성능·품질에 지장이 없어야 한다")
+
+- Redis 호출 횟수: **등록 외 모든 요청은 1회**(변화 없음). 등록 요청만 최대 3회
+  (global + register + 개인). 등록은 하루 200~600건 규모라 이 증가는 무시할 수 있다.
+- 앞 단에서 차단되면 뒤 단은 호출하지 않으므로, 공격 트래픽일수록 호출 수가 **줄어든다**.
+- 선택 최적화: IP 키와 개인 키를 하나의 Lua 호출에 `KEYS[1], KEYS[2]` 로 함께 넘기면 등록도 2회로
+  줄일 수 있다(단일 노드 전제). 필요해지기 전에는 하지 않는다.
+- 개인 해시 계산은 요청당 SHA-256 1회(수 μs)와 등록 본문(수십 바이트) 캐싱뿐이다.
+  본문 캐싱은 `POST /api/v1/registrations` 에만 적용하므로 다른 경로의 비용은 0 이다.
 
 ---
 
