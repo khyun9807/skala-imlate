@@ -83,20 +83,32 @@ test.describe('어제 인원 안내', () => {
     expect(seen.size, `같은 문구만 반복됐다: ${[...seen]}`).toBeGreaterThan(1)
   })
 
-  test('읽히는 자리에 있다 — 카운트다운 아래, 입력 폼 위', async ({ page }) => {
+  test('맨 아래에 있다 — 등록에 필요한 정보를 밀어내지 않는다', async ({ page }) => {
     await open(page)
 
     const note = page.locator('.yesterday-note')
     await expect(note).toBeVisible()
 
     const noteBox = (await note.boundingBox())!
-    const timerBox = (await page.getByRole('timer').boundingBox())!
-    const formBox = (await page.getByRole('heading', { name: '복귀 정보 입력' }).boundingBox())!
+    const submitBox = (await page.getByRole('button', { name: /복귀 등록하기$/ }).boundingBox())!
+    const noticeBox = (await page.getByRole('heading', { name: '안내', exact: true }).boundingBox())!
 
-    // 마감 카운트다운이 이 화면의 주인공이므로 그 위로 올라가면 안 된다.
-    expect(noteBox.y).toBeGreaterThan(timerBox.y)
-    // 스크롤을 끝까지 내려야 보이면 "너무 눈에 안 띈다" — 입력 폼보다는 위에 있어야 한다.
-    expect(noteBox.y).toBeLessThan(formBox.y)
+    // 입력 폼·안내보다 아래 = 화면 맨 끝.
+    expect(noteBox.y).toBeGreaterThan(submitBox.y)
+    expect(noteBox.y).toBeGreaterThan(noticeBox.y)
+  })
+
+  test('자리는 뒤로 갔어도 글씨는 읽을 수 있는 크기다', async ({ page }) => {
+    await open(page)
+
+    const note = page.locator('.yesterday-note')
+    const style = await note.evaluate((el) => {
+      const s = getComputedStyle(el)
+      return { fontSize: parseFloat(s.fontSize), color: s.color }
+    })
+
+    // 처음에 작고 흐리게 두었다가 "안 보인다"는 피드백을 받았다. 자리만 뒤로 옮기고 크기는 지킨다.
+    expect(style.fontSize).toBeGreaterThanOrEqual(16)
   })
 
   test('제목·배지로 승격되지는 않는다 (곁들이는 문구다)', async ({ page }) => {

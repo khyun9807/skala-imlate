@@ -456,14 +456,6 @@ function clearSavedInput(): void {
         </span>
       </section>
 
-      <!--
-        어제 연장 복귀 인원 한 줄.
-        입력 폼 바로 위에 두어 스크롤하지 않아도 눈에 들어오게 하되, 제목이나 배지로 승격시키지는 않는다
-        (마감 카운트다운이 이 화면에서 가장 중요한 정보라 그 자리를 뺏으면 안 된다).
-        인원이 0이거나 값을 못 불러오면 message 가 빈 문자열이라 아예 그려지지 않는다.
-      -->
-      <p v-if="yesterdayMessage" class="yesterday-note no-print">{{ yesterdayMessage }}</p>
-
       <ResultCard v-if="result" ref="resultRef" :result="result" :curfew-time="curfewTimeLabel" />
 
       <div v-if="result" class="no-print">
@@ -585,6 +577,13 @@ function clearSavedInput(): void {
         </ul>
       </section>
 
+      <!--
+        어제 연장 복귀 인원 한 줄. 화면 맨 아래에 둔다 — 등록에 필요한 정보가 아니라 곁들이는 말이다.
+        다만 글씨는 읽을 수 있는 크기로 유지한다(예전에 흐린 작은 글씨로 두었다가 "안 보인다"는 피드백을 받았다).
+        인원이 0이거나 값을 못 불러오면 message 가 빈 문자열이라 아예 그려지지 않는다.
+      -->
+      <p v-if="yesterdayMessage" class="yesterday-note no-print">{{ yesterdayMessage }}</p>
+
     </div>
   </main>
 </template>
@@ -656,9 +655,10 @@ function clearSavedInput(): void {
 /*
   어제 인원 한 줄.
 
-  등록에 필요한 정보는 아니지만 읽히라고 넣은 문구다. 처음에는 맨 아래 흐린 글씨로 두었는데
-  "너무 눈에 안 띈다"는 피드백을 받아 입력 폼 바로 위로 올리고 대비를 올렸다.
-  다만 제목·배지로 올리지는 않는다 — 이 화면의 주인공은 마감 카운트다운과 입력 폼이다.
+  자리는 화면 맨 아래다. 등록에 필요한 정보가 아니라 곁들이는 말이기 때문이다.
+  다만 글씨 크기·대비는 읽을 수 있는 수준으로 유지한다 —
+  처음에 흐린 작은 글씨로 두었더니 "너무 눈에 안 띈다"는 피드백을 받았다.
+  자리는 뒤로, 가독성은 그대로. 제목·배지로 올리지는 않는다.
 */
 .yesterday-note {
   margin: 0;
