@@ -1,0 +1,27 @@
+# =====================================================================
+# imlate — 인증서 발급/갱신 타이머
+#
+#   배치 위치: /etc/systemd/system/imlate-tls.timer
+#   활성화:     sudo systemctl enable --now imlate-tls.timer
+#   확인:       systemctl list-timers imlate-tls.timer
+#
+#   주기를 1시간으로 잡은 이유
+#     - 최초 발급은 DNS 전파 / EIP 연결 타이밍 때문에 첫 시도에 실패할 수 있다.
+#       1시간마다 재시도하면 늦어도 한 시간 안에 HTTPS 가 켜진다.
+#       (Let's Encrypt 실패 제한은 시간당 5회이므로 1회/시간은 안전하다.)
+#     - 발급 후에는 certbot renew 가 만료 30일 전까지 아무 일도 하지 않으므로
+#       자주 돌아도 부하가 없다.
+# =====================================================================
+
+[Unit]
+Description=imlate 인증서 발급/갱신 타이머
+
+[Timer]
+Unit=imlate-tls.service
+OnBootSec=3min
+OnUnitActiveSec=1h
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

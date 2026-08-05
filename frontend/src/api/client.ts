@@ -10,9 +10,7 @@ import type {
   LookupResponse,
   RegistrationRequest,
   RegistrationResponse,
-  RegistrationSummary,
   RegistrationWindow,
-  StatsSnapshot,
 } from './types'
 import { readItem, writeItem } from '../utils/storage'
 
@@ -154,11 +152,6 @@ export function fetchRegistrationWindow(): Promise<RegistrationWindow> {
   return request<RegistrationWindow>('/registrations/window')
 }
 
-/** 오늘 등록 인원 요약 조회 */
-export function fetchRegistrationSummary(): Promise<RegistrationSummary> {
-  return request<RegistrationSummary>('/registrations/summary')
-}
-
 /** 복귀 등록 */
 export function createRegistration(payload: RegistrationRequest): Promise<RegistrationResponse> {
   return request<RegistrationResponse>('/registrations', { method: 'POST', body: payload })
@@ -167,11 +160,6 @@ export function createRegistration(payload: RegistrationRequest): Promise<Regist
 /** 사감용 조회 페이지 데이터 */
 export function fetchLookup(date: string | null, token: string): Promise<LookupResponse> {
   return request<LookupResponse>('/lookup', { query: { date: date ?? undefined, token } })
-}
-
-/** 공개 통계 요약 */
-export function fetchStatsSummary(): Promise<StatsSnapshot> {
-  return request<StatsSnapshot>('/stats/summary')
 }
 
 // ---------------------------------------------------------------- 내부 유틸

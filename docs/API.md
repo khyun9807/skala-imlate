@@ -19,16 +19,22 @@
 |---|---|---|---|
 | POST | `/api/v1/registrations` | 없음 | 23:30 복귀 등록 |
 | GET | `/api/v1/registrations/window` | 없음 | 등록 창 상태(서버 시간·마감까지 남은 초) |
-| GET | `/api/v1/registrations/summary` | 없음 | 오늘 등록 인원 수(PII 없음) |
-| GET | `/api/v1/lookup` | 조회 토큰 | 사감용 명단·집계·검증·통계 |
-| GET | `/api/v1/stats/summary` | 없음 | 방문/등록 통계 요약(PII 없음) |
-| GET | `/api/v1/stats/daily` | 조회 토큰 | 일자별 통계 |
+| GET | `/api/v1/registrations/summary` | 없음 | 대상일·등록 가능 여부(인원 수 없음) |
+| GET | `/api/v1/lookup` | 조회 토큰 | 사감용 명단·집계 |
+| GET | `/api/v1/stats/summary` | `X-Admin-Key` | 방문/등록 통계 요약 |
+| GET | `/api/v1/stats/daily` | `X-Admin-Key` | 일자별 통계 |
+| GET | `/api/v1/admin/reconciliation` | `X-Admin-Key` | WAL ↔ DB 대사 결과 조회(복구 없음) |
 | POST | `/api/v1/admin/notifications/dispatch` | `X-Admin-Key` | 수동 발송 |
 | POST | `/api/v1/admin/notifications/retry` | `X-Admin-Key` | 실패 채널만 재발송 |
 | GET | `/api/v1/admin/notifications` | `X-Admin-Key` | 발송 이력 조회 |
 | POST | `/api/v1/admin/notifications/preview` | `X-Admin-Key` | 발송 없이 렌더 결과만 확인 |
 | GET | `/actuator/health` | 없음(운영은 내부만) | 사람이 보는 전체 헬스체크(DB·Redis·디스크 포함) |
 | GET | `/actuator/health/alb` | 없음(운영은 내부만) | **로드밸런서 전용** 헬스체크 — `db` + `ping` 만 본다 |
+
+> **노출 원칙 — "기록은 그대로, 노출만 줄인다"**
+> 대사(WAL ↔ DB)와 방문/등록 통계는 예전과 똑같이 **계속 수행·기록**한다. 다만 교육생·사감이 보는
+> 응답(`/registrations/summary`, `/lookup`)과 문자·이메일 문구에는 **넣지 않는다.**
+> 운영자는 `/api/v1/admin/reconciliation` 과 `/api/v1/stats/**` (둘 다 `X-Admin-Key`) 로 확인한다.
 
 > **왜 ALB 용 헬스 그룹을 따로 두는가**
 > 이 서비스는 Redis 가 죽어도 등록을 계속 처리하도록 설계되어 있다(WAL 미기록 경고만 남기고 DB 에는 저장).
@@ -224,10 +230,11 @@ curl -s "http://localhost:8080/api/v1/registrations/window"
 
 ### 2.3 `GET /api/v1/registrations/summary` — 등록 현황 요약(공개)
 
-개인정보를 포함하지 않습니다.
+개인정보를 포함하지 않습니다. **등록 인원 수(`count`)는 내려주지 않습니다** — 사감만 알면 되는 정보라
+등록 화면에는 "지금 등록할 수 있는지"만 필요합니다. 집계 자체는 서버에서 계속 유지됩니다.
 
 ```json
-{ "date": "2026-08-05", "count": 12, "open": true }
+{ "date": "2026-08-05", "open": true }
 ```
 
 ```bash
@@ -238,7 +245,7 @@ curl -s "http://localhost:8080/api/v1/registrations/summary"
 
 ## 3. 조회 API (사감용)
 
-### 3.1 `GET /api/v1/lookup` — 명단·집계·검증·통계
+### 3.1 `GET /api/v1/lookup` — 명단·집계
 
 | 쿼리 | 필수 | 설명 |
 |---|---|---|
@@ -270,25 +277,7 @@ curl -s "http://localhost:8080/api/v1/registrations/summary"
   "byRoom": [
     { "roomNumber": "302", "count": 2 },
     { "roomNumber": "1002", "count": 1 }
-  ],
-  "verification": {
-    "date": "2026-08-05",
-    "status": "CONSISTENT",
-    "dbCount": 12,
-    "walCount": 12,
-    "recoveredCount": 0,
-    "walOnly": [],
-    "dbOnly": [],
-    "checkedAt": "2026-08-05T22:10:00+09:00"
-  },
-  "stats": {
-    "totalVisitors": 540,
-    "todayVisitors": 88,
-    "totalPageViews": 2100,
-    "todayPageViews": 210,
-    "todayRegistrations": 12,
-    "totalRegistrations": 320
-  }
+  ]
 }
 ```
 
@@ -297,9 +286,15 @@ curl -s "http://localhost:8080/api/v1/registrations/summary"
 | `items[].no` | 반 → 이름 정렬 순서로 1부터 부여 |
 | `byClass` | 반 이름 오름차순 |
 | `byRoom` | 호수 정렬 — 숫자면 숫자 크기 순(`302` < `1002`), 아니면 문자열 순 |
-| `verification.status` | `CONSISTENT` / `RECOVERED` / `MISMATCH` / `WAL_UNAVAILABLE` |
-| `verification.walOnly` / `dbOnly` | `"1반/홍길동/302"` 형식. 조회는 복구 없이 비교만 하므로 여기 값이 남을 수 있음 |
-| `stats` | 조회 실패 시 예외 대신 모두 0으로 채워짐 |
+
+> **`verification` / `stats` 필드는 응답에서 제거되었습니다.**
+> 서버는 조회할 때마다 예전과 동일하게 대사(복구 없는 `inspect`)를 수행하지만, 결과는 응답 대신
+> 애플리케이션 로그로만 남깁니다.
+> ```
+> Lookup reconciliation date=2026-08-05 status=CONSISTENT db=12 wal=12
+> ```
+> 대사 결과는 `GET /api/v1/admin/reconciliation`, 통계는 `GET /api/v1/stats/**` 로 확인하세요.
+> 대사가 실패해도 명단 조회는 계속 성공합니다(경고 로그만 남김).
 
 ```bash
 TOKEN='REPLACE_WITH_TOKEN'
@@ -320,9 +315,12 @@ curl -s "http://localhost:8080/api/v1/lookup?date=2026-08-05&token=$TOKEN"
 
 ---
 
-## 4. 통계 API
+## 4. 통계 API (`X-Admin-Key` 필수)
 
-### 4.1 `GET /api/v1/stats/summary` — 요약(공개)
+통계는 사용자 화면에 노출하지 않습니다. **집계는 예전과 동일하게 계속 수행**하되(방문·페이지뷰·등록),
+조회는 두 엔드포인트 모두 **운영자 전용**입니다. 키가 없거나 틀리면 **401 `UNAUTHORIZED`** 입니다.
+
+### 4.1 `GET /api/v1/stats/summary` — 요약(운영자 전용)
 
 ```json
 {
@@ -340,16 +338,18 @@ curl -s "http://localhost:8080/api/v1/lookup?date=2026-08-05&token=$TOKEN"
 - 이 엔드포인트(`/api/v1/stats/**`)는 방문 통계 집계 대상에서 제외됩니다(통계가 통계를 부풀리지 않도록).
 
 ```bash
-curl -s "http://localhost:8080/api/v1/stats/summary"
+curl -s "http://localhost:8080/api/v1/stats/summary" -H "X-Admin-Key: $ADMIN_KEY"
 ```
 
-### 4.2 `GET /api/v1/stats/daily` — 일자별 통계
+### 4.2 `GET /api/v1/stats/daily` — 일자별 통계(운영자 전용)
 
 | 쿼리 | 필수 | 설명 |
 |---|---|---|
 | `from` | 선택 | 생략 시 `to` 기준 최근 30일 |
 | `to` | 선택 | 생략 시 오늘 |
-| `token` | 필수 | 조회 토큰. **`to`(없으면 오늘) 날짜로 검증**합니다 |
+
+> 예전에는 사감 조회 토큰(`token`)으로 열렸지만, 통계를 운영자 전용으로 통일하면서 `X-Admin-Key` 로
+> 바뀌었습니다. `token` 파라미터는 더 이상 사용하지 않습니다.
 
 기간 내 모든 날짜가 오름차순으로 빠짐없이 내려옵니다(데이터 없는 날은 0). 최대 366일.
 
@@ -364,10 +364,11 @@ curl -s "http://localhost:8080/api/v1/stats/summary"
 | 상태 | code | 상황 |
 |---|---|---|
 | 400 | `VALIDATION_FAILED` | `from > to`, 기간 366일 초과, 날짜 형식 오류 |
-| 403 | `FORBIDDEN` | 토큰 누락·불일치·만료 |
+| 401 | `UNAUTHORIZED` | `X-Admin-Key` 누락·불일치 |
 
 ```bash
-curl -s "http://localhost:8080/api/v1/stats/daily?from=2026-08-01&to=2026-08-05&token=$TOKEN"
+curl -s "http://localhost:8080/api/v1/stats/daily?from=2026-08-01&to=2026-08-05" \
+  -H "X-Admin-Key: $ADMIN_KEY"
 ```
 
 ---
@@ -379,6 +380,40 @@ curl -s "http://localhost:8080/api/v1/stats/daily?from=2026-08-01&to=2026-08-05&
 (`terraform output -raw admin_api_key`)입니다.
 
 모든 관리 API의 `date` 파라미터는 선택이며, 생략하면 **오늘(KST)** 입니다.
+
+### 5.0 `GET /api/v1/admin/reconciliation` — WAL ↔ DB 대사 결과
+
+조회 페이지에서 검증 결과를 감췄기 때문에, **운영자가 대사 결과를 확인하는 정식 경로**입니다.
+GET 이므로 **복구는 하지 않고 비교만** 합니다(`ReconciliationService.inspect`). 누락분 복구는
+22:10 발송 경로에서 계속 수행됩니다.
+
+| 쿼리 | 기본값 | 설명 |
+|---|---|---|
+| `date` | 오늘 | 대사 대상일 |
+
+```json
+{
+  "date": "2026-08-05",
+  "status": "CONSISTENT",
+  "dbCount": 12,
+  "walCount": 12,
+  "recoveredCount": 0,
+  "walOnly": [],
+  "dbOnly": [],
+  "checkedAt": "2026-08-05T22:10:00+09:00"
+}
+```
+
+| 필드 | 설명 |
+|---|---|
+| `status` | `CONSISTENT` / `RECOVERED` / `MISMATCH` / `WAL_UNAVAILABLE` |
+| `walOnly` / `dbOnly` | `"1반/홍길동/302"` 형식. 복구 없이 비교만 하므로 값이 남을 수 있음 |
+| `recoveredCount` | 이 경로에서는 항상 `0`(복구하지 않음) |
+
+```bash
+curl -s "http://localhost:8080/api/v1/admin/reconciliation?date=2026-08-05" \
+  -H "X-Admin-Key: $ADMIN_KEY"
+```
 
 ### 5.1 `POST /api/v1/admin/notifications/dispatch` — 수동 발송
 

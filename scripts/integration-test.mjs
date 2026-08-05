@@ -140,6 +140,15 @@ const clearRateLimit = () => redisDelPattern('imlate:rl:*')
 
 const admin = (path, method = 'POST') => req(method, path, { headers: { 'X-Admin-Key': ADMIN_KEY } })
 
+/**
+ * 통계는 피드백 2번 반영으로 관리자 전용이 되었다(사용자 화면에 노출하지 않는다).
+ * 집계 자체는 계속 동작해야 하므로 관리자 키로 확인한다.
+ */
+const adminStats = async () => (await admin('/stats/summary', 'GET')).json
+
+/** 대사 결과도 /lookup 응답에서 빠지고 관리자 전용 엔드포인트로 옮겨졌다. */
+const adminReconciliation = async (date) => (await admin(`/admin/reconciliation?date=${date}`, 'GET')).json
+
 // ── 테스트 데이터 ────────────────────────────────────────────────────────────
 const STUDENTS = [
   ['1반', '김하늘', '301'], ['1반', '박서준', '302'], ['1반', '이도윤', '303'],
@@ -307,7 +316,7 @@ async function run() {
 
   // ---------------------------------------------------------------- 7
   section('7. DB 행 유실 → WAL 복구 (R8) · 통계 재집계 없음')
-  const statsBefore = (await req('GET', '/stats/summary')).json
+  const statsBefore = await adminStats()
   const victim = mysql(`SELECT CONCAT(class_name,'/',student_name,'/',room_number) FROM return_registration WHERE registration_date='${TODAY}' ORDER BY id DESC LIMIT 1`)
   mysql(`DELETE FROM return_registration WHERE registration_date='${TODAY}' ORDER BY id DESC LIMIT 1`)
   info(`DB 에서 강제 삭제: ${victim} (WAL 상태는 COMMITTED)`)
@@ -318,7 +327,7 @@ async function run() {
   check('대사 포함 발송 200', recovered.status === 200, `status=${recovered.status} ${recovered.text.slice(0, 160)}`)
   check('WAL 에서 DB 로 자동 복구 (12건)',
     Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE registration_date='${TODAY}'`)) === 12)
-  const statsAfter = (await req('GET', '/stats/summary')).json
+  const statsAfter = await adminStats()
   check('COMMITTED 복구는 등록 통계를 재집계하지 않음',
     statsAfter?.todayRegistrations === statsBefore?.todayRegistrations,
     `before=${statsBefore?.todayRegistrations} after=${statsAfter?.todayRegistrations}`)
@@ -332,13 +341,13 @@ async function run() {
   })
   redis('hset', walKey, pendingId, pendingEntry)
   info('WAL 에만 존재하는 PENDING 항목을 주입했습니다(= 최초 DB INSERT 가 실패한 상황).')
-  const beforePending = (await req('GET', '/stats/summary')).json?.todayRegistrations
+  const beforePending = (await adminStats())?.todayRegistrations
 
   const rec2 = await admin(`/admin/notifications/dispatch?date=${TODAY}&force=true`)
   check('대사 재실행 200', rec2.status === 200)
   check('PENDING 항목이 DB 로 복구됨',
     Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE wal_id='${pendingId}'`)) === 1)
-  const afterPending = (await req('GET', '/stats/summary')).json?.todayRegistrations
+  const afterPending = (await adminStats())?.todayRegistrations
   check('PENDING 복구는 등록 통계에 집계됨', afterPending === beforePending + 1,
     `before=${beforePending} after=${afterPending}`)
   check('총 13명', Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE registration_date='${TODAY}'`)) === 13)
@@ -377,7 +386,11 @@ async function run() {
   check('문자에 조회 URL', /https?:\/\/\S+lookup\?date=/.test(sms + mailText))
   check('이메일에 반·이름·호수 모두 포함',
     mailText.includes('1반') && mailText.includes('김하늘') && mailText.includes('301'))
-  check('이메일에 검증(대사) 결과 포함', /검증|일치|CONSISTENT|RECOVERED/.test(mailText))
+  // 피드백 2번: 검증·통계는 사감에게 보여주지 않는다. 다시 들어가면 회귀다.
+  check('문자에 검증(대사) 문구 없음', !/검증|WAL|대사/.test(sms), sms.match(/검증.*/)?.[0] ?? '')
+  check('문자에 통계 문구 없음', !/통계|방문자/.test(sms), sms.match(/통계.*/)?.[0] ?? '')
+  check('이메일에 검증 섹션 없음', !/검증 결과|WAL/.test(mailText))
+  check('이메일에 통계 섹션 없음', !/\[통계\]|방문자/.test(mailText))
   check('이메일 HTML 에 UTF-8 명시', /utf-8/i.test(mailHtml))
   check('한글이 깨지지 않음(치환문자 없음)', !/�/.test(sms + mailText + mailHtml))
 
@@ -395,13 +408,19 @@ async function run() {
   check('명단 13건', lookup.json?.items?.length === 13, `len=${lookup.json?.items?.length}`)
   check('항목에 반/이름/호수 존재',
     !!lookup.json?.items?.[0]?.className && !!lookup.json?.items?.[0]?.studentName && !!lookup.json?.items?.[0]?.roomNumber)
-  check('대사 상태 정상', ['CONSISTENT', 'RECOVERED'].includes(lookup.json?.verification?.status),
-    JSON.stringify(lookup.json?.verification?.status))
-  check('DB/WAL 카운트 일치',
-    lookup.json?.verification?.dbCount === lookup.json?.verification?.walCount,
+  // 피드백 2번: 조회 응답에서 검증·통계가 빠졌는지 확인(다시 들어오면 회귀)
+  check('조회 응답에 verification 없음', lookup.json?.verification === undefined,
     JSON.stringify(lookup.json?.verification))
+  check('조회 응답에 stats 없음', lookup.json?.stats === undefined, JSON.stringify(lookup.json?.stats))
+
+  // 대사 자체는 계속 수행되어야 한다 — 관리자 전용 엔드포인트로 확인
+  const adminRec = await adminReconciliation(TODAY)
+  check('관리자 대사 조회 정상', ['CONSISTENT', 'RECOVERED'].includes(adminRec?.status),
+    JSON.stringify(adminRec?.status))
+  check('DB/WAL 카운트 일치(관리자 조회)', adminRec?.dbCount === adminRec?.walCount,
+    JSON.stringify({ db: adminRec?.dbCount, wal: adminRec?.walCount }))
   check('반별 집계 존재', (lookup.json?.byClass?.length ?? 0) >= 4)
-  check('통계 포함', typeof lookup.json?.stats?.todayRegistrations === 'number')
+  check('명단 항목에 등록시각 포함', !!lookup.json?.items?.[0]?.registeredAt)
 
   check('위조 토큰 → 403', (await req('GET', `/lookup?date=${TODAY}&token=forged`)).status === 403)
   check('토큰 없음 → 400/403', [400, 403].includes((await req('GET', `/lookup?date=${TODAY}`)).status))
@@ -410,15 +429,17 @@ async function run() {
 
   // ---------------------------------------------------------------- 12
   section('12. 통계 (R15)')
-  const stats = (await req('GET', '/stats/summary')).json
+  check('통계는 인증 없이 접근 불가(피드백 2)',
+    [401, 403].includes((await req('GET', '/stats/summary')).status))
+  const stats = await adminStats()
   check('오늘 등록 수 = 13', stats?.todayRegistrations === 13, JSON.stringify(stats))
   check('방문자 수 집계됨', (stats?.totalVisitors ?? 0) >= 1, String(stats?.totalVisitors))
   check('페이지뷰 집계됨', (stats?.totalPageViews ?? 0) > 10, String(stats?.totalPageViews))
   check('Redis HLL 일자별 방문자', Number(redis('pfcount', `imlate:stats:uv:${TODAY}`)) >= 1)
-  check('일자별 통계는 토큰 필요',
-    [400, 403].includes((await req('GET', `/stats/daily?from=${TODAY}&to=${TODAY}`)).status))
-  check('토큰 있으면 일자별 통계 조회 가능',
-    (await req('GET', `/stats/daily?from=${TODAY}&to=${TODAY}&token=${encodeURIComponent(token ?? '')}`)).status === 200)
+  check('일자별 통계는 관리자 키 필요',
+    [401, 403].includes((await req('GET', `/stats/daily?from=${TODAY}&to=${TODAY}`)).status))
+  check('관리자 키로는 일자별 통계 조회 가능',
+    (await admin(`/stats/daily?from=${TODAY}&to=${TODAY}`, 'GET')).status === 200)
 
   // ---------------------------------------------------------------- 13
   section('13. 관리 API 보호')
@@ -462,11 +483,13 @@ async function run() {
     const tokenAfter = urlAfter ? new URL(urlAfter[0]).searchParams.get('token') : token
     const afterOutage = (await req('GET', `/lookup?date=${TODAY}&token=${encodeURIComponent(tokenAfter ?? '')}`)).json
 
-    check('대사가 WAL 누락을 MISMATCH 로 보고', afterOutage?.verification?.status === 'MISMATCH',
-      JSON.stringify(afterOutage?.verification?.status))
+    // 대사 결과는 /lookup 응답에서 빠졌으므로 관리자 전용 엔드포인트로 확인한다.
+    const recAfterOutage = await adminReconciliation(TODAY)
+    check('대사가 WAL 누락을 MISMATCH 로 보고', recAfterOutage?.status === 'MISMATCH',
+      JSON.stringify(recAfterOutage?.status))
     check('장애 중 등록 건이 dbOnly 목록에 정확히 나타남',
-      (afterOutage?.verification?.dbOnly ?? []).some((s) => s.includes('레디스장애중')),
-      JSON.stringify(afterOutage?.verification?.dbOnly))
+      (recAfterOutage?.dbOnly ?? []).some((s) => s.includes('레디스장애중')),
+      JSON.stringify(recAfterOutage?.dbOnly))
     check('그래도 명단 자체에는 포함되어 사감에게 전달됨',
       (afterOutage?.items ?? []).some((i) => i.studentName === '레디스장애중'),
       `items=${afterOutage?.items?.length}`)
@@ -482,7 +505,7 @@ async function run() {
 
     // DB 가 죽으면 SELECT 도 못 하므로, 비교 기준값은 **정지 전에** 미리 읽어 둔다.
     const rowsBeforeDown = Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE registration_date='${TODAY}'`))
-    const statsBeforeDown = (await req('GET', '/stats/summary')).json?.todayRegistrations
+    const statsBeforeDown = (await adminStats())?.todayRegistrations
     info(`기준값: DB ${rowsBeforeDown}건 / 등록 통계 ${statsBeforeDown}건`)
 
     info(`MySQL 컨테이너(${MYSQL_CONTAINER})를 정지합니다…`)
@@ -571,11 +594,11 @@ async function run() {
       (lookupDown?.items ?? []).some((i) => i.studentName === DOWN_NAME),
       `items=${lookupDown?.items?.length}`)
     check('복구 후에는 walOnly 목록에 남지 않음',
-      !(lookupDown?.verification?.walOnly ?? []).some((s) => s.includes(DOWN_NAME)),
-      JSON.stringify(lookupDown?.verification?.walOnly))
+      !((await adminReconciliation(TODAY))?.walOnly ?? []).some((s) => s.includes(DOWN_NAME)),
+      'walOnly 에 남아 있으면 복구되지 않은 것')
 
     // PENDING 복구 = 최초 INSERT 가 실패해 통계에 잡히지 않았던 건이므로 이번에 집계되어야 한다.
-    const statsAfterDown = (await req('GET', '/stats/summary')).json?.todayRegistrations
+    const statsAfterDown = (await adminStats())?.todayRegistrations
     check('PENDING 복구는 등록 통계에 1 증가로 반영됨', statsAfterDown === statsBeforeDown + 1,
       `before=${statsBeforeDown} after=${statsAfterDown}`)
 

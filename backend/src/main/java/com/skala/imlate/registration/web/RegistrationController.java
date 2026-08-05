@@ -1,7 +1,5 @@
 package com.skala.imlate.registration.web;
 
-import java.time.LocalDate;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -80,11 +78,12 @@ public class RegistrationController {
     /**
      * 공개용 등록 현황 요약(PII 없음).
      *
-     * @return 오늘 날짜·등록 인원 수·등록 가능 여부
+     * <p>등록 인원 수는 사감만 알면 되는 정보이므로 내려주지 않는다(집계는 서버에서 계속 유지된다).
+     *
+     * @return 오늘 날짜·등록 가능 여부
      */
     @GetMapping("/summary")
     public RegistrationSummaryResponse summary() {
-        LocalDate date = windowPolicy.targetDate();
-        return new RegistrationSummaryResponse(date, registrationService.countByDate(date), windowPolicy.isOpen());
+        return new RegistrationSummaryResponse(windowPolicy.targetDate(), windowPolicy.isOpen());
     }
 }

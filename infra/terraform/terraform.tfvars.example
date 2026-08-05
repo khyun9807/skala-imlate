@@ -17,42 +17,88 @@ additional_tags = {
   Owner = "skala-imlate"
 }
 
+# =====================================================================
+# 아키텍처 요약 (기본값 기준)
+#
+#   인터넷 → Route53 A 레코드(skala-imlate.com → EIP)
+#          → EC2 퍼블릭 서브넷의 nginx 80/443 (Let's Encrypt TLS)
+#               ├ / , /lookup      → /var/www/imlate 정적 서빙(SPA 폴백)
+#               └ /api, /actuator  → 127.0.0.1:8080 Spring
+#          ← 아웃바운드도 같은 EIP (알리고 화이트리스트 대상)
+#     RDS / ElastiCache 는 프라이빗 서브넷.
+#
+#   ALB / NAT Gateway / WAF 는 200명 규모에 오버스펙이라 끈다.
+#   필요해지면 아래 변수만 true 로 바꾸면 된다(모듈은 그대로 남아 있다).
+# =====================================================================
+
 # ---------------- 네트워크 ----------------
 vpc_cidr = "10.20.0.0/16"
 
 # 비우면 리전에서 사용 가능한 AZ 2개를 자동 선택한다.
 # availability_zones = ["ap-northeast-2a", "ap-northeast-2c"]
 
-enable_nat_gateway = true
-single_nat_gateway = true # NAT 1개만 사용 (비용 절감)
+# NAT 미사용(월 $35~40 절감). 앱이 퍼블릭 서브넷에 있어 IGW 로 직접 나간다.
+enable_nat_gateway = false
+single_nat_gateway = true # enable_nat_gateway = true 로 되돌릴 때만 의미 있음
 
 # 운영자 사무실/VPN 대역만 열어 준다. 비우면 SSH 규칙을 아예 만들지 않는다.
 # (권장: SSH 를 열지 않고 SSM Session Manager 로 접속)
 ssh_allowed_cidrs = []
 # ssh_allowed_cidrs = ["203.0.113.10/32"]
 
+# 인터넷 → EC2 직접 인바운드(80/443). enable_alb = false 일 때만 적용된다.
+# 교육생 누구나 휴대폰으로 접속해야 하므로 전체 개방이 맞다.
+direct_ingress_cidrs = ["0.0.0.0/0"]
+
+# enable_alb = true 로 되돌릴 때만 쓰인다.
 alb_ingress_cidrs = ["0.0.0.0/0"]
 
-# ---------------- ALB / WAF ----------------
-enable_alb            = true
+# ---------------- 도메인 / DNS / TLS  ★ 고정 URL ----------------
+# 도메인은 Route53 콘솔에서 직접 구매한다. 구매하면 퍼블릭 호스팅 영역이 자동 생성되므로
+# Terraform 은 그 영역을 조회만 하고 A 레코드만 얹는다(영역을 새로 만들지 않는다).
+domain_name = "" # 예: "skala-imlate.com"
+
+# 같은 서버를 가리키게 할 추가 도메인(A 레코드 + 인증서 SAN 에 함께 들어간다).
+domain_aliases = []
+# domain_aliases = ["www.skala-imlate.com"]
+
+# 비우면 domain_name 의 상위 2개 라벨로 추정한다.
+route53_zone_name = ""
+
+create_dns_record = true
+dns_record_ttl    = 300
+
+# Let's Encrypt HTTPS. domain_name 이 비어 있으면 아무 일도 하지 않는다.
+# 발급은 EC2 안의 systemd 타이머가 best-effort 로 수행하며,
+# 실패해도 배포는 성공하고 nginx 는 80 포트로 계속 서비스한다.
+enable_tls        = true
+tls_contact_email = "" # 예: "ops@example.com" — 인증서 만료 알림 수신 주소(권장)
+
+# ---------------- ALB / WAF (기본 비활성) ----------------
+# 인스턴스 1대 구성에서 ALB 는 오버스펙이다(월 $18 고정 + LCU).
+# 다시 켜려면 enable_alb = true + public_app = false + enable_nat_gateway = true
+# + create_dns_record = false(대신 alb_dns_name 으로 alias 레코드 생성) 조합을 쓴다.
+enable_alb            = false
 alb_target_port       = 8080 # 8080 = Spring 직결 / 80 = EC2 nginx 경유(프론트 정적 서빙)
 # Redis 제외 헬스 그룹. ElastiCache 장애로 인스턴스가 통째로 빠지는 것을 막는다.
 alb_health_check_path = "/actuator/health/alb"
 
 # ACM 인증서를 발급했다면 ARN 을 넣는다. 넣으면 443 리스너가 생기고 80 은 리다이렉트된다.
+# (enable_alb = false 인 기본 구성에서는 ACM 대신 Let's Encrypt 를 쓴다.)
 acm_certificate_arn = ""
 # acm_certificate_arn = "arn:aws:acm:ap-northeast-2:<ACCOUNT_ID>:certificate/<CERT_ID>"
 
-enable_waf                   = true
+# WAF 는 ALB 에만 붙일 수 있어 enable_alb = false 면 어차피 만들어지지 않는다.
+enable_waf                   = false
 waf_rate_limit_per_5min      = 2000 # IP 당 5분 2000요청 초과 시 차단
 waf_managed_rules_count_only = false
 
 # ---------------- EC2 ----------------
 instance_type         = "t3.small"
 instance_architecture = "x86_64" # t4g 계열을 쓰면 "arm64"
-public_app            = false    # 기본: 프라이빗 서브넷 + ALB 경유
-associate_elastic_ip  = false
-key_pair_name         = "" # 예: "imlate-prod-key"
+public_app            = true     # 퍼블릭 서브넷 배치(ALB/NAT 없이 단독 운영)
+associate_elastic_ip  = true     # ★ 고정 IP. 재배포해도 주소가 바뀌지 않는다.
+key_pair_name         = ""       # 예: "imlate-prod-key" (deploy.sh --mode ssh 를 쓰려면 필요)
 root_volume_size      = 30
 install_nginx            = true
 install_cloudwatch_agent = true
@@ -98,8 +144,9 @@ ses_from_name                = "기숙사 야간복귀 시스템"
 enable_ses_configuration_set = false
 
 # ---------------- 애플리케이션 URL ----------------
-# 커스텀 도메인을 쓰면 여기에 넣는다. 비우면 ALB DNS 이름이 사용된다.
-app_base_url   = "" # 예: "https://imlate.example.com"
+# 보통 비워 둔다. domain_name 을 지정했으면 https://{domain_name} 이 자동으로 쓰인다.
+# 그 다음 순서는 ALB URL → EIP → 127.0.0.1 이다.
+app_base_url   = "" # 예: "https://skala-imlate.com"
 allowed_origin = "" # 비우면 app_base_url 과 동일
 
 # 비우면 자동 생성된다(terraform output -raw lookup_token_secret / admin_api_key 로 확인).

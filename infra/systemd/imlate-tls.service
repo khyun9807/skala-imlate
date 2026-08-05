@@ -1,0 +1,21 @@
+# =====================================================================
+# imlate — Let's Encrypt 인증서 발급/갱신 유닛 (oneshot)
+#
+#   배치 위치: /etc/systemd/system/imlate-tls.service
+#   직접 실행:  sudo systemctl start imlate-tls.service
+#   로그:       journalctl -u imlate-tls.service
+#
+#   imlate-tls.sh 는 항상 exit 0 이므로 이 유닛이 실패하는 일은 없다.
+#   인증서를 못 받아도 nginx 는 80 포트로 계속 서비스한다(의도된 설계).
+# =====================================================================
+
+[Unit]
+Description=imlate Let's Encrypt 인증서 발급/갱신 (best-effort)
+Documentation=file:///usr/local/bin/imlate-tls.sh
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/imlate-tls.sh
+TimeoutStartSec=900

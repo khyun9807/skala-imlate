@@ -3,7 +3,7 @@
  *
  * 검증 항목
  * - 12명 명단이 모두 렌더링되고 반·이름·호수·등록시각이 보인다
- * - 검증(대사) 배지 상태별 표기
+ * - 대사(검증) 결과·복구 처리·통계는 **화면에 나오지 않는다** (사용자 피드백 2번, 회귀 방지)
  * - 검색어·반 필터 동작
  * - 모바일(<=600px) 카드 레이아웃 전환
  * - 토큰 없음 / 권한 없음 / 빈 명단 안내
@@ -14,16 +14,16 @@ import type { Locator, Page } from '@playwright/test'
 
 import {
   CURFEW_TIME_LABEL,
+  FORBIDDEN_PATHS,
   LOOKUP_PATH,
   RETURN_TIME_LABEL,
   TEST_BY_CLASS,
+  TEST_BY_ROOM,
   TEST_DATE_LABEL,
   TEST_ROSTER,
-  TEST_STATS,
-  VERIFICATION_LABELS,
   installApiMocks,
 } from './helpers/mockApi'
-import type { MockOptions, VerificationStatus } from './helpers/mockApi'
+import type { ApiMock, MockOptions } from './helpers/mockApi'
 
 /** 데스크톱 기준 뷰포트 */
 const DESKTOP = { width: 1280, height: 800 }
@@ -36,9 +36,10 @@ function clock(value: string): string {
 }
 
 /** 목을 설치하고 조회 화면을 연다. */
-async function openLookup(page: Page, options: MockOptions = {}, path: string = LOOKUP_PATH): Promise<void> {
-  await installApiMocks(page, options)
+async function openLookup(page: Page, options: MockOptions = {}, path: string = LOOKUP_PATH): Promise<ApiMock> {
+  const mock = await installApiMocks(page, options)
   await page.goto(path)
+  return mock
 }
 
 /** 표(데스크톱) 로케이터 */
@@ -88,7 +89,7 @@ test.describe('명단 표시 (데스크톱)', () => {
     await expect(page.locator('.reg-list__table-wrap')).toBeVisible()
   })
 
-  test('반별 인원과 통계, 안내 문구가 표시된다', async ({ page }) => {
+  test('반별 인원과 안내 문구가 표시된다', async ({ page }) => {
     await openLookup(page)
 
     await expect(page.getByRole('heading', { name: '반별 인원' })).toBeVisible()
@@ -96,9 +97,11 @@ test.describe('명단 표시 (데스크톱)', () => {
       await expect(page.getByRole('button', { name: `${entry.className} ${entry.count}명` })).toBeVisible()
     }
 
-    await expect(page.getByRole('heading', { name: '통계' })).toBeVisible()
-    await expect(page.getByText('오늘 방문자')).toBeVisible()
-    await expect(page.getByText(TEST_STATS.totalVisitors.toLocaleString('ko-KR'))).toBeVisible()
+    // 호수별 인원은 접혀 있다가 펼치면 보인다.
+    await page.getByText('호수별 인원 보기').click()
+    for (const entry of TEST_BY_ROOM) {
+      await expect(page.getByText(`${entry.roomNumber} ${entry.count}명`)).toBeVisible()
+    }
 
     await expect(
       page.getByText(`${CURFEW_TIME_LABEL} 이후 기숙사 문이 잠기며, ${RETURN_TIME_LABEL}에 일괄 개방됩니다.`),
@@ -107,36 +110,61 @@ test.describe('명단 표시 (데스크톱)', () => {
   })
 })
 
-test.describe('검증(대사) 배지', () => {
+test.describe('검증·통계 비노출 (회귀 방지)', () => {
   test.use({ viewport: DESKTOP })
 
-  const statuses: VerificationStatus[] = ['CONSISTENT', 'RECOVERED', 'MISMATCH', 'WAL_UNAVAILABLE']
+  /**
+   * 사용자 피드백 2번: "검증(대사) 결과·복구 처리·통계는 화면에 안 보이게 한다."
+   * 아래 문구 중 하나라도 화면에 다시 나타나면 이 테스트가 먼저 실패한다.
+   */
+  const FORBIDDEN_TEXTS = [
+    '검증',
+    '대사',
+    'WAL',
+    'Redis',
+    'DB',
+    '복구',
+    '차이 항목',
+    '확인 시각',
+    '통계',
+    '방문자',
+    '페이지뷰',
+  ]
 
-  for (const status of statuses) {
-    test(`${status} 상태는 "${VERIFICATION_LABELS[status]}" 로 표시된다`, async ({ page }) => {
-      await openLookup(page, { verification: status })
+  test('명단 화면 어디에도 검증·복구·통계 문구가 없다', async ({ page }) => {
+    await openLookup(page)
+    await expect(tableRows(page)).toHaveCount(TEST_ROSTER.length)
 
-      await expect(page.getByText(VERIFICATION_LABELS[status])).toBeVisible()
-      await expect(page.getByRole('heading', { name: '검증 결과' })).toBeVisible()
-      await expect(page.getByText('DB 기록')).toBeVisible()
-      await expect(page.getByText('WAL(Redis) 기록')).toBeVisible()
-    })
-  }
-
-  test('MISMATCH 이면 차이 항목을 펼쳐 볼 수 있다', async ({ page }) => {
-    await openLookup(page, { verification: 'MISMATCH' })
-
-    const details = page.getByRole('group').filter({ hasText: '차이 항목 자세히 보기' })
-    await expect(details).toBeVisible()
-    await page.getByText('차이 항목 자세히 보기').click()
-    await expect(page.getByText('DB 에만 있는 항목 (1건)')).toBeVisible()
-    await expect(page.getByText('3반/서준호/503')).toBeVisible()
+    for (const text of FORBIDDEN_TEXTS) {
+      await expect(page.getByText(text), `화면에 남아 있으면 안 되는 문구: ${text}`).toHaveCount(0)
+    }
+    await expect(page.getByRole('heading', { name: '검증 결과' })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: '통계' })).toHaveCount(0)
   })
 
-  test('WAL_UNAVAILABLE 이면 WAL 카운트가 0 으로 보인다', async ({ page }) => {
-    await openLookup(page, { verification: 'WAL_UNAVAILABLE' })
+  test('검증·통계 API 를 호출하지 않는다', async ({ page }) => {
+    const mock = await openLookup(page)
+    await expect(tableRows(page)).toHaveCount(TEST_ROSTER.length)
 
-    await expect(page.getByText(`DB ${TEST_ROSTER.length} · WAL 0`)).toBeVisible()
+    for (const forbidden of FORBIDDEN_PATHS) {
+      expect(
+        mock.handledPaths.some((path) => path.endsWith(forbidden)),
+        `호출되면 안 되는 API: ${forbidden} (실제 호출: ${mock.handledPaths.join(', ')})`,
+      ).toBe(false)
+    }
+  })
+
+  test('응답에 verification·stats 가 없어도 명단이 정상 렌더링된다', async ({ page }) => {
+    const lookupResponse = page.waitForResponse((response) => response.url().includes('/api/v1/lookup'))
+
+    await openLookup(page)
+    await expect(tableRows(page)).toHaveCount(TEST_ROSTER.length)
+
+    // 목이 새 계약(verification/stats 없음)을 따르는지도 함께 확인한다.
+    const body = (await (await lookupResponse).json()) as Record<string, unknown>
+    expect(body).not.toHaveProperty('verification')
+    expect(body).not.toHaveProperty('stats')
+    expect(body.totalCount).toBe(TEST_ROSTER.length)
   })
 })
 

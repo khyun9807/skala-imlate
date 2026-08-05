@@ -1,0 +1,185 @@
+# =====================================================================
+# CD — 프로덕션 배포 (jar + systemd, 컨테이너 없음)
+#
+#   흐름
+#     main 푸시 / 수동 실행
+#       → OIDC 로 AWS 임시 자격증명 획득
+#       → infra/scripts/deploy.sh --mode ssm
+#            백엔드 bootJar 빌드 → 프론트 npm build → S3 업로드
+#            → SSM RunCommand 로 EC2 에서 원격 설치(jar 교체 + systemctl restart)
+#            → 헬스체크
+#
+#   배포 로직은 전부 infra/scripts/deploy.sh 에 있다. 여기서 다시 구현하지 않는다.
+#   (로컬에서 손으로 배포할 때와 CD 가 하는 일이 100% 같아야 하기 때문)
+#   deploy.sh 는 실패하면 0 이 아닌 코드로 끝나므로 잡도 그대로 실패한다.
+# =====================================================================
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: '배포 범위'
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - backend
+          - frontend
+      skip_config:
+        description: 'nginx/systemd 설정 파일 갱신 생략'
+        required: false
+        default: false
+        type: boolean
+
+# 배포는 겹치면 안 된다. 진행 중인 배포를 취소하지 않고 순서대로 기다린다.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  # OIDC 토큰 발급에 반드시 필요하다. 이게 없으면
+  # "Could not load credentials / OIDC token not available" 로 실패한다.
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: 프로덕션 배포
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    # Settings → Environments → production 에서 승인자를 지정하면
+    # 이 잡이 승인 대기 상태로 멈춘다(수동 배포 게이트).
+    #
+    # ※ environment 를 선언하면 OIDC 토큰의 sub 가
+    #   repo:<owner>/<repo>:environment:production 으로 바뀐다.
+    #   IAM 신뢰 정책에 이 sub 가 없으면 AssumeRole 이 거부된다(docs/CICD.md 참고).
+    environment:
+      name: production
+      url: ${{ vars.APP_BASE_URL }}
+
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------
+      # 설정값이 비어 있으면 AWS 를 건드리기 전에 먼저 실패시킨다.
+      # -----------------------------------------------------------------
+      - name: 필수 설정 확인
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          APP_INSTANCE_ID: ${{ vars.APP_INSTANCE_ID }}
+          ARTIFACT_BUCKET: ${{ vars.ARTIFACT_BUCKET }}
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+        run: |
+          missing=0
+          for name in AWS_REGION APP_INSTANCE_ID ARTIFACT_BUCKET AWS_ROLE_ARN; do
+            if [ -z "${!name}" ]; then
+              echo "::error::필수 설정이 비어 있습니다: ${name} — docs/CICD.md 의 설정 표를 확인하세요."
+              missing=1
+            fi
+          done
+          if [ "${missing}" -ne 0 ]; then
+            exit 1
+          fi
+          echo "설정 확인 완료 (region=${AWS_REGION}, instance=${APP_INSTANCE_ID}, bucket=${ARTIFACT_BUCKET})"
+
+      - name: JDK 21 설치 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Node 20 설치
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # -----------------------------------------------------------------
+      # AWS 인증 — OIDC (장기 액세스 키를 쓰지 않는 이유)
+      #
+      #   리포지터리 시크릿에 AKIA... 액세스 키를 넣으면 그 키는 수동으로 회수할 때까지
+      #   무기한 유효하다. 로그·포크·서드파티 액션 어디로든 새면 그대로 계정 침해가 된다.
+      #   OIDC 는 잡마다 GitHub 이 서명한 단명 토큰을 STS 가 검증해 1시간짜리 임시 키를
+      #   내주고, 신뢰 정책의 sub 조건으로 "이 리포지터리의 이 환경"까지 못 박는다.
+      #   따라서 저장소에 남는 비밀은 민감하지 않은 역할 ARN 하나뿐이다.
+      # -----------------------------------------------------------------
+      - name: AWS 자격증명 획득 (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: gha-imlate-deploy-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # -----------------------------------------------------------------
+      # 실제 배포 — 기존 스크립트를 그대로 호출한다.
+      # ubuntu-latest 러너에는 aws CLI v2 가 이미 설치돼 있고, cygpath 가 없으므로
+      # deploy.sh 의 Windows 경로 변환 분기는 자동으로 건너뛴다.
+      # -----------------------------------------------------------------
+      - name: 배포 실행 (S3 업로드 → SSM RunCommand → 헬스체크)
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          APP_INSTANCE_ID: ${{ vars.APP_INSTANCE_ID }}
+          ARTIFACT_BUCKET: ${{ vars.ARTIFACT_BUCKET }}
+          ARTIFACT_PREFIX: ${{ vars.ARTIFACT_PREFIX }}
+          HEALTH_URL: ${{ vars.HEALTH_URL }}
+          DEPLOY_SCOPE: ${{ inputs.scope }}
+          SKIP_CONFIG: ${{ inputs.skip_config }}
+        run: |
+          set -euo pipefail
+
+          # 값이 워크플로 입력/변수에서 오므로 셸 인자에 직접 보간하지 않고
+          # 환경변수를 인용해 넘긴다(따옴표·공백으로 인한 명령 주입 방지).
+          args=(--mode ssm
+                --instance-id "${APP_INSTANCE_ID}"
+                --bucket "${ARTIFACT_BUCKET}"
+                --region "${AWS_REGION}")
+
+          if [ -n "${ARTIFACT_PREFIX}" ]; then
+            args+=(--s3-prefix "${ARTIFACT_PREFIX}")
+          fi
+
+          if [ -n "${HEALTH_URL}" ]; then
+            args+=(--health-url "${HEALTH_URL}")
+          else
+            echo "::warning::HEALTH_URL 변수가 비어 있어 배포 후 외부 헬스체크를 건너뜁니다."
+          fi
+
+          case "${DEPLOY_SCOPE:-all}" in
+            backend)  args+=(--backend-only) ;;
+            frontend) args+=(--frontend-only) ;;
+            *)        : ;;
+          esac
+
+          if [ "${SKIP_CONFIG}" = "true" ]; then
+            args+=(--no-config)
+          fi
+
+          chmod +x infra/scripts/deploy.sh
+          infra/scripts/deploy.sh "${args[@]}"
+
+      - name: 배포 요약
+        if: always()
+        env:
+          APP_INSTANCE_ID: ${{ vars.APP_INSTANCE_ID }}
+          ARTIFACT_BUCKET: ${{ vars.ARTIFACT_BUCKET }}
+          HEALTH_URL: ${{ vars.HEALTH_URL }}
+          RESULT: ${{ job.status }}
+        run: |
+          {
+            echo "## 배포 결과: ${RESULT}"
+            echo ""
+            echo "| 항목 | 값 |"
+            echo "| --- | --- |"
+            echo "| 커밋 | \`${GITHUB_SHA}\` |"
+            echo "| 대상 인스턴스 | \`${APP_INSTANCE_ID}\` |"
+            echo "| 아티팩트 버킷 | \`${ARTIFACT_BUCKET}\` |"
+            echo "| 헬스체크 | ${HEALTH_URL:-(생략)} |"
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -204,15 +204,26 @@ class RegistrationControllerTest {
     }
 
     @Test
-    @DisplayName("GET /summary 는 PII 없이 날짜·인원 수·등록 가능 여부만 반환한다")
+    @DisplayName("GET /summary 는 날짜·등록 가능 여부만 반환한다")
     void 등록_현황_요약을_반환한다() throws Exception {
-        when(registrationService.countByDate(TestFixtures.DATE)).thenReturn(12L);
         when(windowPolicy.isOpen()).thenReturn(true);
 
         mockMvc.perform(get(PATH + "/summary"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.date").value("2026-08-05"))
-                .andExpect(jsonPath("$.count").value(12))
                 .andExpect(jsonPath("$.open").value(true));
+    }
+
+    @Test
+    @DisplayName("GET /summary 는 등록 인원 수를 노출하지 않는다(사감만 아는 정보)")
+    void 등록_현황_요약에_인원수가_없다() throws Exception {
+        when(windowPolicy.isOpen()).thenReturn(true);
+
+        mockMvc.perform(get(PATH + "/summary"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.count").doesNotExist());
+
+        // 응답에 넣지 않으므로 집계 조회 자체를 하지 않는다.
+        verify(registrationService, never()).countByDate(any());
     }
 }

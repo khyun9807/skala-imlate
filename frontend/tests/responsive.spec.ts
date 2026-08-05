@@ -48,7 +48,6 @@ async function openRegisterPage(page: Page, options: MockOptions = {}): Promise<
   await page.goto('/')
   await expect(page.getByRole('heading', { level: 1, name: '야간 복귀 등록' })).toBeVisible()
   await expect(page.getByRole('timer')).toContainText('1시간 00분 00초')
-  await expect(page.getByText('오늘 등록 인원')).toBeVisible()
   await settle(page)
 }
 
@@ -127,7 +126,6 @@ test.describe('조회 화면(/lookup) 반응형', () => {
       await expect(page.getByRole('heading', { level: 1, name: '야간 복귀 명단' })).toBeVisible()
       await expect(page.getByText(TEST_DATE_LABEL)).toBeVisible()
       await expect(page.getByText(`총 ${TEST_ROSTER.length}명`)).toBeVisible()
-      await expect(page.getByRole('heading', { name: '검증 결과' })).toBeVisible()
       await expect(page.getByRole('heading', { name: '반별 인원' })).toBeVisible()
       await expect(page.getByRole('heading', { name: '복귀 명단', exact: true })).toBeVisible()
       await expect(page.getByRole('searchbox', { name: '이름, 반, 호수로 검색' })).toBeVisible()
@@ -148,17 +146,21 @@ test.describe('상태 화면 반응형', () => {
       await installApiMocks(page, { window: 'closed' })
       await page.goto('/')
       await expect(page.getByRole('timer')).toContainText('등록 마감')
-      await expect(page.getByText('오늘 등록 인원')).toBeVisible()
+      await expect(page.getByText('마감 이후에는 등록할 수 없습니다.')).toBeVisible()
       await settle(page)
 
       await assertResponsive(page, viewport.width)
     })
 
-    test(`명단 12명 + 검증 차이 화면 — ${viewport.name}`, async ({ page }) => {
+    test(`명단 12명 + 호수별 인원 펼침 — ${viewport.name}`, async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height })
-      await openLookupPage(page, { verification: 'MISMATCH' })
+      await openLookupPage(page)
 
-      await expect(page.getByText('차이 확인 필요')).toBeVisible()
+      // 접혀 있던 영역을 펼쳤을 때도 칩 목록이 화면을 넘치지 않아야 한다.
+      await page.getByText('호수별 인원 보기').click()
+      await expect(page.getByText('호수별 인원 보기')).toBeVisible()
+      await settle(page)
+
       await assertResponsive(page, viewport.width)
     })
 

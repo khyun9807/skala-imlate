@@ -20,11 +20,6 @@ output "public_ip" {
   value       = aws_instance.app.public_ip
 }
 
-output "elastic_ip" {
-  description = "연결된 고정 EIP(없으면 null)"
-  value       = one(aws_eip.app[*].public_ip)
-}
-
 output "ami_id" {
   description = "사용된 AMI ID"
   value       = local.ami_id

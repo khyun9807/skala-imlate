@@ -68,9 +68,21 @@ variable "availability_zones" {
 }
 
 variable "enable_nat_gateway" {
-  description = "프라이빗 서브넷의 아웃바운드용 NAT Gateway 생성 여부. false 로 두면 프라이빗 EC2 가 SSM/SES 에 접근하지 못한다."
+  description = <<-EOT
+    프라이빗 서브넷의 아웃바운드용 NAT Gateway 생성 여부.
+
+    기본값 false — 200명 규모 서비스에 NAT 는 오버스펙이다(1개당 월 $35~40 + 데이터 전송료).
+    앱 EC2 를 퍼블릭 서브넷에 두면(public_app = true) 인터넷 게이트웨이로 직접 나가므로
+    NAT 없이도 SSM / SES / 알리고 / dnf 저장소에 모두 접근할 수 있다.
+
+    트레이드오프
+      false : 비용 0. 앱이 퍼블릭 서브넷에 놓이므로 보안 그룹이 유일한 방벽이다
+              (인바운드는 80/443 만 열고 8080 은 열지 않는다).
+      true  : 앱을 프라이빗 서브넷에 숨길 수 있다. public_app = false 와 함께 쓴다.
+              RDS / ElastiCache 는 어느 쪽이든 프라이빗 서브넷에 남는다.
+  EOT
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "single_nat_gateway" {
@@ -89,30 +101,144 @@ variable "ssh_allowed_cidrs" {
 }
 
 variable "alb_ingress_cidrs" {
-  description = "ALB 80/443 인바운드를 허용할 CIDR 목록"
+  description = "ALB 80/443 인바운드를 허용할 CIDR 목록(enable_alb = true 일 때만 사용)"
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+variable "direct_ingress_cidrs" {
+  description = <<-EOT
+    ALB 없이 인터넷 → EC2 로 직접 들어오는 80/443 을 허용할 CIDR 목록.
+    enable_alb = false 일 때만 규칙이 생성된다(ALB 를 쓰면 우회 경로가 되므로 만들지 않는다).
+
+    트레이드오프: 기본값 0.0.0.0/0 은 전면 공개다. 교육생 누구나 휴대폰으로 접속해야 하는
+    서비스이므로 이게 맞다. 사내에서만 쓸 거라면 사무실/VPN 대역으로 좁힌다.
+    Spring 포트(8080)는 어떤 경우에도 열지 않는다 — nginx 가 127.0.0.1 로만 프록시한다.
+  EOT
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
 
 variable "app_port" {
-  description = "Spring Boot 애플리케이션 포트"
+  description = <<-EOT
+    Spring Boot 애플리케이션 포트.
+    ※ infra/nginx/imlate-app.conf 가 127.0.0.1:8080 을 고정으로 프록시하므로,
+       이 값을 바꾸면 nginx 설정도 함께 바꿔야 한다.
+  EOT
   type        = number
   default     = 8080
 }
 
 variable "web_port" {
-  description = "EC2 nginx 포트(프론트 정적 서빙 + /api 리버스 프록시)"
+  description = "EC2 nginx HTTP 포트(프론트 정적 서빙 + /api 리버스 프록시)"
   type        = number
   default     = 80
+}
+
+variable "web_tls_port" {
+  description = "EC2 nginx HTTPS 포트(Let's Encrypt 인증서로 직접 종단)"
+  type        = number
+  default     = 443
+}
+
+# ---------------------------------------------------------------------
+# 도메인 / DNS / TLS
+#
+#   고객이 보는 URL 을 고정하기 위한 설정이다(피드백 3번).
+#   도메인은 Route53 콘솔에서 직접 구매한다. 구매하면 호스팅 영역이 자동으로 생기므로
+#   Terraform 은 그 영역을 **조회만** 하고 A 레코드만 만든다(영역을 새로 만들지 않는다).
+# ---------------------------------------------------------------------
+variable "domain_name" {
+  description = <<-EOT
+    서비스 도메인(예: "skala-imlate.com"). Route53 에서 구매한 도메인을 그대로 적는다.
+
+    비워 두면 DNS 레코드도 TLS 도 만들지 않고 EIP 주소로만 접속하게 된다.
+    값을 넣으면
+      1) 이 도메인의 A 레코드가 앱 EIP 를 가리키도록 생성되고,
+      2) app_base_url 이 비어 있을 때 https://{domain_name} 이 서비스 base URL 이 되며,
+      3) EC2 부팅 후 Let's Encrypt 인증서를 자동 발급한다(enable_tls).
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "domain_aliases" {
+  description = <<-EOT
+    추가로 같은 서버를 가리키게 할 도메인 목록(예: ["www.skala-imlate.com"]).
+    A 레코드와 인증서 SAN 에 함께 들어간다. 호스팅 영역은 domain_name 것과 같아야 한다.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "route53_zone_name" {
+  description = <<-EOT
+    A 레코드를 만들 기존 호스팅 영역 이름(예: "skala-imlate.com").
+    비우면 domain_name 의 상위 2개 라벨로 추정한다
+    (imlate.skala-imlate.com → skala-imlate.com).
+    영역은 조회만 하며 Terraform 이 생성하지 않는다.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "create_dns_record" {
+  description = <<-EOT
+    Route53 A 레코드를 Terraform 이 관리할지 여부. domain_name 이 비어 있으면 아무것도 만들지 않는다.
+    false 로 두면 DNS 는 손으로 관리하고 Terraform 은 EIP 만 알려 준다(outputs.app_public_ip).
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "dns_record_ttl" {
+  description = "A 레코드 TTL(초). 짧을수록 주소 변경 반영이 빠르지만 조회 비용이 는다."
+  type        = number
+  default     = 300
+}
+
+variable "enable_tls" {
+  description = <<-EOT
+    nginx 에서 Let's Encrypt 인증서로 HTTPS 를 종단할지 여부.
+    domain_name 이 비어 있으면 이 값이 true 여도 아무 일도 하지 않는다(도메인 없이는 발급 불가).
+
+    ★ 발급은 best-effort 다. EC2 안의 systemd 타이머가 1시간마다 시도하며,
+      실패해도 부팅/배포는 성공으로 끝나고 nginx 는 80 포트로 계속 서비스한다.
+      성공하면 그때부터 80 → 443 리다이렉트가 켜진다.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "tls_contact_email" {
+  description = <<-EOT
+    Let's Encrypt 계정 이메일. 인증서 만료 임박 알림이 이 주소로 온다.
+    비우면 --register-unsafely-without-email 로 등록되어 알림을 받지 못한다(권장하지 않음).
+  EOT
+  type        = string
+  default     = ""
 }
 
 # ---------------------------------------------------------------------
 # ALB
 # ---------------------------------------------------------------------
 variable "enable_alb" {
-  description = "Application Load Balancer 생성 여부"
+  description = <<-EOT
+    Application Load Balancer 생성 여부.
+
+    기본값 false — 인스턴스가 1대인 구성에서 ALB 는 오버스펙이다
+    (월 $18 고정 + LCU 과금인데 얻는 건 헬스체크 정도다).
+    끄면 EC2 의 nginx 가 직접 80/443 을 받고 Let's Encrypt 로 TLS 를 종단한다.
+
+    트레이드오프
+      false : 비용 절감, 구조가 단순. 대신 인스턴스 교체 중에는 서비스가 잠깐 끊긴다.
+              고정 주소는 EIP + Route53 A 레코드로 보장한다.
+      true  : 무중단 배포·다중 AZ·ACM 인증서·WAF 연동이 가능해진다.
+              다시 켤 때는 acm_certificate_arn 과 app_base_url 도 함께 정리할 것.
+              modules/alb 와 modules/waf 는 지우지 않고 남겨 두었다.
+  EOT
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "alb_internal" {
@@ -160,9 +286,17 @@ variable "alb_deletion_protection" {
 # WAF (rate limiting 2단 방어)
 # ---------------------------------------------------------------------
 variable "enable_waf" {
-  description = "ALB 앞단 AWS WAFv2 Web ACL 생성 여부. 애플리케이션 Redis 리미터와 2단 방어를 구성한다."
+  description = <<-EOT
+    ALB 앞단 AWS WAFv2 Web ACL 생성 여부.
+
+    기본값 false — WAF 는 ALB 에만 붙일 수 있어서 enable_alb = false 면 어차피 만들어지지 않는다.
+    또 Web ACL 월 $5 + 규칙당 $1 + 요청당 과금이라 200명 규모에는 과하다.
+
+    트레이드오프: 끄면 L7 DDoS 1차 방어가 없어진다. 대신 nginx limit_req(10r/s)와
+    애플리케이션 Redis 토큰 버킷(등록 8회/분 등) 2단 방어는 그대로 남는다.
+  EOT
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "waf_rate_limit_per_5min" {
@@ -209,15 +343,35 @@ variable "ami_id" {
 }
 
 variable "public_app" {
-  description = "true 면 앱 EC2 를 퍼블릭 서브넷에 배치하고 퍼블릭 IP 를 부여한다(ALB 없이 단독 운영용). 기본은 프라이빗 서브넷."
+  description = <<-EOT
+    앱 EC2 를 퍼블릭 서브넷에 배치할지 여부.
+
+    기본값 true — ALB 도 NAT 도 없는 구성이므로 앱이 직접 인터넷에 붙어야 한다.
+    보안은 보안 그룹으로 지킨다: 인바운드는 80/443 만, 8080 은 열지 않는다.
+
+    트레이드오프
+      true  : NAT 비용 0. 아웃바운드도 EIP 로 나가므로 알리고 화이트리스트가 IP 하나로 끝난다.
+      false : 앱이 프라이빗 서브넷으로 숨는다. 대신 enable_nat_gateway = true 가 필수이고
+              (SSM/SES/dnf 접근) 인바운드는 ALB 를 통해야 한다.
+  EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "associate_elastic_ip" {
-  description = "앱 EC2 에 고정 EIP 를 붙일지 여부(public_app = true 일 때만 의미 있음)"
+  description = <<-EOT
+    앱 EC2 에 고정 EIP 를 붙일지 여부(public_app = true 일 때만 의미 있음).
+
+    기본값 true — 고객이 보는 URL 을 고정하려면(피드백 3번) 반드시 필요하다.
+    EIP 없이 자동 할당 퍼블릭 IP 를 쓰면 인스턴스를 재시작/교체할 때마다 주소가 바뀌어
+    Route53 A 레코드와 알리고 화이트리스트를 매번 다시 등록해야 한다.
+
+    ※ 이 EIP 는 인스턴스가 아니라 루트 모듈에 따로 생성되고
+      aws_eip_association 으로만 연결된다. 따라서 인스턴스를 교체(-replace)해도
+      주소는 그대로 유지된다.
+  EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "key_pair_name" {
@@ -450,7 +604,15 @@ variable "enable_ses_configuration_set" {
 # 애플리케이션 시크릿 / 설정 (SSM Parameter Store 로 저장)
 # ---------------------------------------------------------------------
 variable "app_base_url" {
-  description = "사감 조회 페이지 base URL(imlate.lookup.base-url). 비우면 ALB DNS 이름으로 자동 구성한다."
+  description = <<-EOT
+    사감 조회 링크의 base URL(imlate.lookup.base-url). 보통 비워 둔다.
+
+    비우면 아래 순서로 자동 결정된다.
+      1) domain_name 이 있으면  https://{domain_name}  (enable_tls = false 면 http://)
+      2) enable_alb = true 이면 ALB URL
+      3) EIP 가 있으면          http://{EIP}
+      4) 그 외                  http://127.0.0.1:{app_port}
+  EOT
   type        = string
   default     = ""
 }

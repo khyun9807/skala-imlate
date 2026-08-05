@@ -26,15 +26,17 @@ import com.skala.imlate.registration.service.ReconciliationService;
 import com.skala.imlate.registration.service.RegistrationService;
 import com.skala.imlate.registration.service.RegistrationWindowPolicy;
 import com.skala.imlate.registration.web.dto.LookupResponse;
-import com.skala.imlate.stats.StatsQueryService;
-import com.skala.imlate.stats.StatsSnapshot;
 
 /**
  * 사감용 조회 페이지 API(R8, R9 / SPEC §5.5).
  *
  * <p>{@code GET /api/v1/lookup?date=YYYY-MM-DD&token=…} — 토큰은
  * {@link AccessTokenService#requireValid(LocalDate, String)} 로 검증한다(실패 시 403).
- * 명단·집계·WAL 대사 결과·방문 통계를 조립해 한 번에 내려준다.
+ *
+ * <p>응답에는 <b>사감이 실제로 필요한 정보만</b> 담는다(명단 · 반/호수별 집계). WAL ↔ DB 대사는
+ * 예전과 동일하게 매 조회마다 수행하지만 결과는 <b>로그로만 남기고</b> 화면에는 내보내지 않는다.
+ * 방문/등록 통계도 마찬가지로 응답에 포함하지 않는다(집계 자체는 인터셉터가 계속 수행한다).
+ * 운영자는 {@code GET /api/v1/admin/reconciliation}, {@code GET /api/v1/stats/**} 로 확인한다.
  */
 @RestController
 @RequestMapping("/api/v1/lookup")
@@ -64,7 +66,6 @@ public class LookupController {
     private final ReconciliationService reconciliationService;
     private final RegistrationWindowPolicy windowPolicy;
     private final AccessTokenService accessTokenService;
-    private final StatsQueryService statsQueryService;
     private final Clock clock;
 
     /**
@@ -72,20 +73,17 @@ public class LookupController {
      * @param reconciliationService WAL ↔ DB 대사(복구 없는 inspect 만 사용)
      * @param windowPolicy          기준 날짜·안내 시각
      * @param accessTokenService    조회 토큰 검증
-     * @param statsQueryService     통계 조회(stats 모듈)
      * @param clock                 서비스 기준 시계
      */
     public LookupController(RegistrationService registrationService,
                             ReconciliationService reconciliationService,
                             RegistrationWindowPolicy windowPolicy,
                             AccessTokenService accessTokenService,
-                            StatsQueryService statsQueryService,
                             Clock clock) {
         this.registrationService = registrationService;
         this.reconciliationService = reconciliationService;
         this.windowPolicy = windowPolicy;
         this.accessTokenService = accessTokenService;
-        this.statsQueryService = statsQueryService;
         this.clock = clock;
     }
 
@@ -94,7 +92,7 @@ public class LookupController {
      *
      * @param date  조회 대상일(생략 시 오늘). 미래 날짜는 400
      * @param token 조회 토큰(필수, 검증 실패 시 403)
-     * @return 명단·집계·대사·통계
+     * @return 명단·집계
      */
     @GetMapping
     public LookupResponse lookup(
@@ -111,7 +109,9 @@ public class LookupController {
         // 토큰 검증 (실패·미지정 모두 403)
         accessTokenService.requireValid(target, token);
 
-        ReconciliationReport verification = reconciliationService.inspect(target);
+        // 대사는 예전 그대로 수행하고 결과는 로그로만 남긴다(화면에는 노출하지 않는다).
+        recordReconciliation(target);
+
         List<ReturnRegistration> rows = registrationService.findByDate(target);
 
         List<LookupResponse.Item> items = new ArrayList<>(rows.size());
@@ -133,25 +133,26 @@ public class LookupController {
                 .map(entry -> new LookupResponse.RoomCount(entry.getKey(), entry.getValue()))
                 .toList();
 
-        log.info("Lookup served date={} count={} verification={}", target, rows.size(), verification.status());
+        log.info("Lookup served date={} count={}", target, rows.size());
         return new LookupResponse(target, OffsetDateTime.now(clock), rows.size(),
                 windowPolicy.returnTime(), windowPolicy.curfewTime(),
-                items, byClass, byRoom, verification, safeStats());
+                items, byClass, byRoom);
     }
 
-    /** 통계 조회는 조회 페이지의 부가 정보이므로 실패해도 0 으로 대체한다(가용성 우선). */
-    private StatsSnapshot safeStats() {
+    /**
+     * WAL ↔ DB 대사를 수행하고 결과를 로그에만 기록한다.
+     *
+     * <p>대사 결과가 더 이상 응답에 포함되지 않으므로, 대사가 실패했다고 해서 사감의 명단 조회까지
+     * 막을 이유가 없다. 실패는 경고 로그로 남기고 조회는 계속 진행한다(가용성 우선).
+     */
+    private void recordReconciliation(LocalDate target) {
         try {
-            StatsSnapshot snapshot = statsQueryService.snapshot();
-            return snapshot == null ? emptyStats() : snapshot;
+            ReconciliationReport verification = reconciliationService.inspect(target);
+            log.info("Lookup reconciliation date={} status={} db={} wal={}",
+                    target, verification.status(), verification.dbCount(), verification.walCount());
         } catch (RuntimeException ex) {
-            log.warn("Stats snapshot failed — 0 으로 대체합니다. cause={}", ex.toString());
-            return emptyStats();
+            log.warn("Lookup reconciliation failed date={} cause={}", target, ex.toString());
         }
-    }
-
-    private static StatsSnapshot emptyStats() {
-        return new StatsSnapshot(0L, 0L, 0L, 0L, 0L, 0L);
     }
 
     private static Integer toIntOrNull(String value) {

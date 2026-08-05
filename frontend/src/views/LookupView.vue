@@ -2,8 +2,9 @@
 /**
  * 사감용 명단 조회 화면 (`/lookup?date=&token=`).
  *
- * - 검증(대사) 결과 배지 + DB/WAL 카운트
- * - 명단 표(모바일은 카드), 반별 요약, 검색/필터, 통계, 인쇄
+ * - 명단 표(모바일은 카드), 반별·호수별 요약, 검색/필터, 인쇄
+ * - 대사(검증) 결과·복구 처리·통계는 사감이 볼 필요가 없어 화면에 노출하지 않는다.
+ *   (서버가 기록만 남긴다. 응답에도 해당 필드가 없다.)
  */
 
 import { computed, onMounted, ref, watch } from 'vue'
@@ -11,8 +12,6 @@ import { useRoute } from 'vue-router'
 
 import AppHeader from '../components/AppHeader.vue'
 import RegistrationTable from '../components/RegistrationTable.vue'
-import StatCard from '../components/StatCard.vue'
-import StatusBadge from '../components/StatusBadge.vue'
 import { fetchLookup, toApiError } from '../api/client'
 import type { LookupResponse } from '../api/types'
 import { formatClockTime, formatKoreanDate, formatNumber, formatTimeHm, todayIsoLocal } from '../utils/format'
@@ -39,8 +38,6 @@ const returnTimeLabel = computed(() => formatTimeHm(data.value?.returnTime) || '
 const curfewTimeLabel = computed(() => formatTimeHm(data.value?.curfewTime) || '22:30')
 const generatedAtLabel = computed(() => formatClockTime(data.value?.generatedAt))
 
-const verification = computed(() => data.value?.verification ?? null)
-const stats = computed(() => data.value?.stats ?? null)
 const byClass = computed(() => data.value?.byClass ?? [])
 const byRoom = computed(() => data.value?.byRoom ?? [])
 
@@ -111,10 +108,6 @@ function printPage(): void {
       <AppHeader title="야간 복귀 명단" :subtitle="dateLabel">
         <template #badges>
           <span v-if="data" class="badge badge--info">총 {{ formatNumber(data.totalCount) }}명</span>
-          <StatusBadge v-if="verification" :status="verification.status" />
-          <span v-if="verification" class="badge badge--neutral tabular">
-            DB {{ formatNumber(verification.dbCount) }} · WAL {{ formatNumber(verification.walCount) }}
-          </span>
           <span v-if="data" class="badge badge--neutral">{{ returnTimeLabel }} 일괄 복귀</span>
         </template>
         <template #actions>
@@ -159,36 +152,6 @@ function printPage(): void {
       </section>
 
       <template v-else-if="data">
-        <!-- 검증 결과 -->
-        <section v-if="verification" class="card">
-          <div class="row-between">
-            <h2 class="card__title">검증 결과</h2>
-            <span class="text-sm text-muted">확인 시각 {{ formatClockTime(verification.checkedAt) }}</span>
-          </div>
-          <div class="verify-grid">
-            <StatCard label="DB 기록" :value="verification.dbCount" unit="건" />
-            <StatCard label="WAL(Redis) 기록" :value="verification.walCount" unit="건" />
-            <StatCard label="복구 처리" :value="verification.recoveredCount" unit="건" />
-          </div>
-          <details v-if="verification.walOnly.length > 0 || verification.dbOnly.length > 0" class="detail-block">
-            <summary>차이 항목 자세히 보기</summary>
-            <div class="detail-block__body">
-              <div v-if="verification.walOnly.length > 0">
-                <h3>WAL 에만 있던 항목 ({{ verification.walOnly.length }}건)</h3>
-                <ul class="plain-list">
-                  <li v-for="entry in verification.walOnly" :key="`wal-${entry}`">{{ entry }}</li>
-                </ul>
-              </div>
-              <div v-if="verification.dbOnly.length > 0">
-                <h3>DB 에만 있는 항목 ({{ verification.dbOnly.length }}건)</h3>
-                <ul class="plain-list">
-                  <li v-for="entry in verification.dbOnly" :key="`db-${entry}`">{{ entry }}</li>
-                </ul>
-              </div>
-            </div>
-          </details>
-        </section>
-
         <!-- 반별 요약 -->
         <section v-if="byClass.length > 0" class="card">
           <h2 class="card__title">반별 인원</h2>
@@ -250,17 +213,6 @@ function printPage(): void {
           />
         </section>
 
-        <!-- 통계 -->
-        <section v-if="stats" class="card">
-          <h2 class="card__title">통계</h2>
-          <div class="stats-grid">
-            <StatCard label="오늘 방문자" :value="stats.todayVisitors" unit="명" />
-            <StatCard label="총 방문자" :value="stats.totalVisitors" unit="명" />
-            <StatCard label="오늘 등록" :value="stats.todayRegistrations" unit="건" />
-            <StatCard label="총 등록" :value="stats.totalRegistrations" unit="건" />
-          </div>
-        </section>
-
         <!-- 안내 -->
         <section class="card card--flat">
           <h2 class="card__title">안내</h2>
@@ -278,14 +230,6 @@ function printPage(): void {
 <style scoped>
 .spaced {
   margin-top: var(--space-3);
-}
-
-.verify-grid,
-.stats-grid {
-  display: grid;
-  gap: var(--space-3);
-  margin-top: var(--space-4);
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
 }
 
 .detail-block {
@@ -309,18 +253,6 @@ function printPage(): void {
   display: grid;
   gap: var(--space-4);
   margin-top: var(--space-2);
-}
-
-.detail-block__body h3 {
-  font-size: var(--fs-sm);
-  color: var(--c-text-muted);
-  margin-bottom: var(--space-2);
-}
-
-.plain-list {
-  display: grid;
-  gap: var(--space-1);
-  font-size: var(--fs-sm);
 }
 
 .chip--button {

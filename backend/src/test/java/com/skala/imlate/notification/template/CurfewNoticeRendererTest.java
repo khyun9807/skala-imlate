@@ -17,6 +17,9 @@ import com.skala.imlate.support.TestFixtures;
  *
  * <p>요구사항 R4/R9 에 따라 문자·이메일 본문에 <b>반·이름·호수</b>, 23:30 복귀 안내, 22:30 통금 안내,
  * 조회 페이지 URL 이 반드시 포함되어야 한다. 빈 명단에서도 예외 없이 렌더링되어야 한다.
+ *
+ * <p>반대로 <b>대사(검증) 결과와 이용 통계는 어떤 본문에도 들어가면 안 된다.</b> 값이 채워져 있어도
+ * 렌더링에서 제외되는지(회귀 방지) 를 함께 검증한다.
  */
 @DisplayName("사감 안내문 렌더러(CurfewNoticeRenderer)")
 class CurfewNoticeRendererTest {
@@ -83,10 +86,19 @@ class CurfewNoticeRendererTest {
         assertThat(body).contains("23:30");
         assertThat(body).contains("일괄 개방");
 
-        // 검증·통계 요약과 조회 URL
-        assertThat(body).contains("검증: DB 12 / WAL 12 (일치)");
-        assertThat(body).contains("통계:");
         assertThat(body).contains(LOOKUP_URL);
+    }
+
+    @Test
+    @DisplayName("문자 본문에는 대사(검증) 결과와 통계가 포함되지 않는다")
+    void 문자_본문에_검증과_통계가_없다() {
+        // verification/stats 가 채워져 있어도 문구에는 새어 나가면 안 된다.
+        String body = renderer.smsBody(samplePayload());
+
+        assertThat(body).doesNotContain("검증");
+        assertThat(body).doesNotContain("통계");
+        assertThat(body).doesNotContain("WAL");
+        assertThat(body).doesNotContain("방문");
     }
 
     @Test
@@ -115,7 +127,7 @@ class CurfewNoticeRendererTest {
     }
 
     @Test
-    @DisplayName("이메일 텍스트 본문은 고정폭 표에 반·이름·호수를 담고 통계·검증·URL 을 포함한다")
+    @DisplayName("이메일 텍스트 본문은 고정폭 표에 반·이름·호수를 담고 안내·URL 을 포함한다")
     void 이메일_텍스트_본문() {
         NoticePayload payload = samplePayload();
 
@@ -130,9 +142,28 @@ class CurfewNoticeRendererTest {
         }
         assertThat(text).contains("23:30");
         assertThat(text).contains("22:30");
-        assertThat(text).contains("[검증 결과 - Redis WAL <-> DB 대사]");
-        assertThat(text).contains("[통계]");
+        assertThat(text).contains("[반별 인원]");
+        assertThat(text).contains("[안내]");
         assertThat(text).contains(LOOKUP_URL);
+    }
+
+    @Test
+    @DisplayName("이메일 본문(텍스트·HTML)에는 검증 결과 섹션과 통계 섹션이 없다")
+    void 이메일_본문에_검증과_통계_섹션이_없다() {
+        NoticePayload payload = samplePayload();
+
+        String text = renderer.emailText(payload);
+        String html = renderer.emailHtml(payload);
+
+        assertThat(text).doesNotContain("[검증 결과 - Redis WAL <-> DB 대사]");
+        assertThat(text).doesNotContain("[통계]");
+        assertThat(text).doesNotContain("WAL");
+        assertThat(text).doesNotContain("방문자");
+
+        assertThat(html).doesNotContain("검증 결과");
+        assertThat(html).doesNotContain("이용 통계");
+        assertThat(html).doesNotContain("WAL");
+        assertThat(html).doesNotContain("방문자");
     }
 
     @Test
@@ -202,7 +233,7 @@ class CurfewNoticeRendererTest {
     }
 
     @Test
-    @DisplayName("검증·통계 정보를 가져오지 못해도(null) 예외 없이 '확인 불가' 로 표기한다")
+    @DisplayName("검증·통계 값이 null 이어도 예외 없이 명단과 안내만 렌더링된다")
     void 검증과_통계가_없어도_렌더링된다() {
         NoticePayload payload = new NoticePayload(TestFixtures.DATE, sampleRows(), LOOKUP_URL,
                 TestFixtures.RETURN_TIME, TestFixtures.CURFEW_TIME, null, null);
@@ -211,23 +242,27 @@ class CurfewNoticeRendererTest {
         String text = renderer.emailText(payload);
         String html = renderer.emailHtml(payload);
 
-        assertThat(sms).contains("검증: 확인 불가");
-        assertThat(sms).contains("통계: 확인 불가");
-        assertThat(text).contains("검증 정보를 가져오지 못했습니다");
-        assertThat(text).contains("통계 정보를 가져오지 못했습니다");
-        assertThat(html).contains("검증 정보를 가져오지 못했습니다");
+        // null 이어도 "확인 불가" 같은 문구조차 남기지 않는다(애초에 렌더링 대상이 아니다).
+        assertThat(sms).doesNotContain("검증").doesNotContain("통계").contains("홍길동", LOOKUP_URL);
+        assertThat(text).doesNotContain("검증").doesNotContain("통계").contains("홍길동", LOOKUP_URL);
+        assertThat(html).doesNotContain("검증").doesNotContain("통계").contains("홍길동");
     }
 
     @Test
-    @DisplayName("복구(RECOVERED) 결과도 문자 요약에 반영된다")
-    void 복구_결과가_요약에_반영된다() {
+    @DisplayName("복구(RECOVERED) 결과도 문자 본문에는 드러나지 않는다")
+    void 복구_결과는_문구에_드러나지_않는다() {
         ReconciliationReport recovered = new ReconciliationReport(TestFixtures.DATE,
                 ReconciliationReport.STATUS_RECOVERED, 12L, 12L, 1L, List.of(), List.of(),
                 TestFixtures.checkedAt(TestFixtures.DATE));
         NoticePayload payload = new NoticePayload(TestFixtures.DATE, sampleRows(), LOOKUP_URL,
                 TestFixtures.RETURN_TIME, TestFixtures.CURFEW_TIME, recovered, TestFixtures.stats());
 
-        assertThat(renderer.smsBody(payload)).contains("검증: DB 12 / WAL 12 (복구 완료)");
+        String body = renderer.smsBody(payload);
+
+        assertThat(body).doesNotContain("복구");
+        assertThat(body).doesNotContain("검증");
+        // 사감에게 필요한 정보(총원·명단·링크)는 그대로 남는다.
+        assertThat(body).contains("12명").contains("홍길동").contains(LOOKUP_URL);
     }
 
     @Test

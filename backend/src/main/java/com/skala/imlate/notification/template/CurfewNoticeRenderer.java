@@ -3,7 +3,6 @@ package com.skala.imlate.notification.template;
 import java.nio.charset.Charset;
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -13,17 +12,15 @@ import java.util.Map;
 
 import org.springframework.stereotype.Component;
 
-import com.skala.imlate.registration.service.ReconciliationReport;
-import com.skala.imlate.stats.StatsSnapshot;
-
 /**
  * 사감 안내 문구 렌더러(R4, R9).
  *
  * <p>문자는 짧게(반별 그룹핑), 이메일 텍스트는 고정폭 표, 이메일 HTML 은 인라인 CSS + 모바일 가독성을
  * 목표로 한다. 한글은 전각이라 폭이 2이므로, 표 정렬은 문자 수가 아니라 <b>표시 폭</b>으로 계산한다.
  *
- * <p>모든 문구에는 요구사항대로 날짜·총원·반/이름/호수 목록·23:30 일괄 개방 안내·22:30 문 잠김 안내·
- * Redis↔DB 검증 요약·통계·조회 페이지 URL 이 포함된다.
+ * <p>문구에는 사감에게 필요한 것만 담는다: 날짜·총원·반/이름/호수 목록·23:30 일괄 개방 안내·
+ * 22:30 문 잠김 안내·조회 페이지 URL. WAL↔DB 대사 결과와 이용 통계는
+ * {@link NoticePayload} 로 계속 전달되지만 <b>문구에는 넣지 않는다</b>(운영 기록은 로그·관리 API 로 남는다).
  */
 @Component
 public class CurfewNoticeRenderer {
@@ -40,10 +37,6 @@ public class CurfewNoticeRenderer {
     /** "23:30" */
     private static final DateTimeFormatter TIME_HHMM =
             DateTimeFormatter.ofPattern("HH:mm", Locale.KOREAN);
-    /** "2026-08-05 22:10:00" */
-    private static final DateTimeFormatter STAMP =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.KOREAN);
-
     /** 국내 문자 길이 판정 문자셋(문자 본문이 너무 길어지면 요약 모드로 전환). */
     private static final Charset EUC_KR = Charset.forName("EUC-KR");
     /** 이 바이트를 넘으면 문자 본문을 "반별 요약" 모드로 바꾼다(LMS 2000바이트 여유분 확보). */
@@ -105,8 +98,6 @@ public class CurfewNoticeRenderer {
         sb.append('\n');
         sb.append("※ ").append(TIME_HHMM.format(curfewTime)).append(" 이후 문은 잠기며 ")
                 .append(TIME_HHMM.format(returnTime)).append("에 일괄 개방됩니다.\n");
-        sb.append(verificationOneLine(payload.verification())).append('\n');
-        sb.append(statsOneLine(payload.stats())).append('\n');
         sb.append("전체 명단: ").append(payload.lookupUrl());
         return sb.toString();
     }
@@ -152,36 +143,6 @@ public class CurfewNoticeRenderer {
                 summary.add(entry.getKey() + " " + entry.getValue().size() + "명");
             }
             sb.append(' ').append(String.join(" / ", summary)).append('\n');
-        }
-        sb.append('\n');
-
-        sb.append("[검증 결과 - Redis WAL <-> DB 대사]\n");
-        ReconciliationReport verification = payload.verification();
-        if (verification == null) {
-            sb.append(" 검증 정보를 가져오지 못했습니다(조회 페이지에서 다시 확인해 주세요).\n");
-        } else {
-            sb.append(" 상태      : ").append(statusLabel(verification.status()))
-                    .append(" (").append(nullToDash(verification.status())).append(")\n");
-            sb.append(" DB 등록   : ").append(verification.dbCount()).append("건\n");
-            sb.append(" WAL 기록  : ").append(verification.walCount()).append("건\n");
-            sb.append(" 복구 건수 : ").append(verification.recoveredCount()).append("건\n");
-            appendDiff(sb, " WAL 전용  : ", verification.walOnly());
-            appendDiff(sb, " DB 전용   : ", verification.dbOnly());
-            sb.append(" 확인 시각 : ").append(formatStamp(verification.checkedAt())).append('\n');
-        }
-        sb.append('\n');
-
-        sb.append("[통계]\n");
-        StatsSnapshot stats = payload.stats();
-        if (stats == null) {
-            sb.append(" 통계 정보를 가져오지 못했습니다.\n");
-        } else {
-            sb.append(" 오늘 방문자   : ").append(stats.todayVisitors()).append("명\n");
-            sb.append(" 오늘 페이지뷰 : ").append(stats.todayPageViews()).append("회\n");
-            sb.append(" 오늘 등록     : ").append(stats.todayRegistrations()).append("건\n");
-            sb.append(" 누적 방문자   : ").append(stats.totalVisitors()).append("명\n");
-            sb.append(" 누적 페이지뷰 : ").append(stats.totalPageViews()).append("회\n");
-            sb.append(" 누적 등록     : ").append(stats.totalRegistrations()).append("건\n");
         }
         sb.append('\n');
 
@@ -272,51 +233,6 @@ public class CurfewNoticeRenderer {
                 summary.add(escape(entry.getKey()) + " " + entry.getValue().size() + "명");
             }
             sb.append(String.join(" · ", summary)).append("</div>\n");
-        }
-        sb.append("</div>\n");
-
-        // 검증 결과
-        sb.append("<div style=\"background:#ffffff;border-radius:12px;padding:16px;margin-top:14px;\">\n");
-        sb.append("<div style=\"font-size:16px;font-weight:700;color:#1f2937;margin-bottom:10px;\">")
-                .append("검증 결과 (Redis WAL ↔ DB)</div>\n");
-        ReconciliationReport verification = payload.verification();
-        if (verification == null) {
-            sb.append("<div style=\"font-size:15px;color:#6b7280;line-height:1.7;\">")
-                    .append("검증 정보를 가져오지 못했습니다.</div>\n");
-        } else {
-            sb.append("<div style=\"font-size:15px;line-height:1.8;color:#374151;\">\n");
-            sb.append(badge(verification.status())).append("<br>\n");
-            sb.append("DB 등록 <strong>").append(verification.dbCount()).append("건</strong> · ");
-            sb.append("WAL 기록 <strong>").append(verification.walCount()).append("건</strong> · ");
-            sb.append("복구 <strong>").append(verification.recoveredCount()).append("건</strong><br>\n");
-            if (verification.walOnly() != null && !verification.walOnly().isEmpty()) {
-                sb.append("WAL 전용: ").append(escape(String.join(", ", verification.walOnly()))).append("<br>\n");
-            }
-            if (verification.dbOnly() != null && !verification.dbOnly().isEmpty()) {
-                sb.append("DB 전용: ").append(escape(String.join(", ", verification.dbOnly()))).append("<br>\n");
-            }
-            sb.append("<span style=\"color:#6b7280;\">확인 시각 ")
-                    .append(escape(formatStamp(verification.checkedAt()))).append("</span>\n");
-            sb.append("</div>\n");
-        }
-        sb.append("</div>\n");
-
-        // 통계
-        StatsSnapshot stats = payload.stats();
-        sb.append("<div style=\"background:#ffffff;border-radius:12px;padding:16px;margin-top:14px;\">\n");
-        sb.append("<div style=\"font-size:16px;font-weight:700;color:#1f2937;margin-bottom:10px;\">이용 통계</div>\n");
-        if (stats == null) {
-            sb.append("<div style=\"font-size:15px;color:#6b7280;\">통계 정보를 가져오지 못했습니다.</div>\n");
-        } else {
-            sb.append("<div style=\"overflow-x:auto;\"><table style=\"width:100%;max-width:100%;")
-                    .append("border-collapse:collapse;font-size:15px;\"><tbody>\n");
-            sb.append(statRow("오늘 방문자", stats.todayVisitors() + "명"));
-            sb.append(statRow("오늘 페이지뷰", stats.todayPageViews() + "회"));
-            sb.append(statRow("오늘 등록", stats.todayRegistrations() + "건"));
-            sb.append(statRow("누적 방문자", stats.totalVisitors() + "명"));
-            sb.append(statRow("누적 페이지뷰", stats.totalPageViews() + "회"));
-            sb.append(statRow("누적 등록", stats.totalRegistrations() + "건"));
-            sb.append("</tbody></table></div>\n");
         }
         sb.append("</div>\n");
 
@@ -439,72 +355,6 @@ public class CurfewNoticeRenderer {
         return pad <= 0 ? text : " ".repeat(pad) + text;
     }
 
-    /** 문자 본문에 넣을 한 줄짜리 검증 요약. */
-    private static String verificationOneLine(ReconciliationReport verification) {
-        if (verification == null) {
-            return "검증: 확인 불가";
-        }
-        return "검증: DB " + verification.dbCount() + " / WAL " + verification.walCount()
-                + " (" + statusLabel(verification.status()) + ")";
-    }
-
-    /** 문자 본문에 넣을 한 줄짜리 통계 요약. */
-    private static String statsOneLine(StatsSnapshot stats) {
-        if (stats == null) {
-            return "통계: 확인 불가";
-        }
-        return "통계: 오늘 방문 " + stats.todayVisitors() + "명 / 오늘 등록 "
-                + stats.todayRegistrations() + "건 / 누적 등록 " + stats.totalRegistrations() + "건";
-    }
-
-    /** 대사 상태 코드를 한국어 라벨로 바꾼다. */
-    private static String statusLabel(String status) {
-        if (status == null) {
-            return "알 수 없음";
-        }
-        return switch (status) {
-            case "CONSISTENT" -> "일치";
-            case "RECOVERED" -> "복구 완료";
-            case "MISMATCH" -> "불일치";
-            case "WAL_UNAVAILABLE" -> "WAL 확인 불가";
-            default -> status;
-        };
-    }
-
-    private static String badge(String status) {
-        String label = statusLabel(status);
-        String background = switch (status == null ? "" : status) {
-            case "CONSISTENT" -> "#e8f5e9";
-            case "RECOVERED" -> "#e3f2fd";
-            case "MISMATCH" -> "#fdecea";
-            default -> "#f3f4f6";
-        };
-        String color = switch (status == null ? "" : status) {
-            case "CONSISTENT" -> "#1b5e20";
-            case "RECOVERED" -> "#0d47a1";
-            case "MISMATCH" -> "#b71c1c";
-            default -> "#374151";
-        };
-        return "<span style=\"display:inline-block;background:" + background + ";color:" + color
-                + ";font-size:15px;font-weight:700;padding:4px 12px;border-radius:999px;\">"
-                + escape(label) + "</span>";
-    }
-
-    private static void appendDiff(StringBuilder sb, String label, List<String> values) {
-        if (values == null || values.isEmpty()) {
-            return;
-        }
-        sb.append(label).append(String.join(", ", values)).append('\n');
-    }
-
-    private static String formatStamp(OffsetDateTime value) {
-        return value == null ? "-" : STAMP.format(value);
-    }
-
-    private static String nullToDash(String value) {
-        return value == null || value.isBlank() ? "-" : value;
-    }
-
     private static String th(String label, String align) {
         return "<th style=\"padding:10px 8px;text-align:" + align + ";font-size:15px;color:#1f2937;"
                 + "border-bottom:2px solid #c7d2fe;white-space:nowrap;\">" + escape(label) + "</th>";
@@ -513,12 +363,6 @@ public class CurfewNoticeRenderer {
     private static String td(String value, String align) {
         return "<td style=\"padding:10px 8px;text-align:" + align + ";font-size:15px;color:#374151;"
                 + "border-bottom:1px solid #e5e7eb;\">" + escape(value) + "</td>";
-    }
-
-    private static String statRow(String label, String value) {
-        return "<tr><td style=\"padding:8px 4px;font-size:15px;color:#6b7280;\">" + escape(label)
-                + "</td><td style=\"padding:8px 4px;font-size:15px;color:#111827;text-align:right;"
-                + "font-weight:600;\">" + escape(value) + "</td></tr>\n";
     }
 
     /** HTML 특수문자 이스케이프(명단은 사용자 입력이므로 반드시 처리한다). */

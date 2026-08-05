@@ -13,8 +13,8 @@ import AppHeader from '../components/AppHeader.vue'
 import CountdownBadge from '../components/CountdownBadge.vue'
 import FormField from '../components/FormField.vue'
 import ResultCard from '../components/ResultCard.vue'
-import { ApiError, createRegistration, fetchRegistrationSummary } from '../api/client'
-import type { RegistrationResponse, RegistrationSummary } from '../api/types'
+import { ApiError, createRegistration } from '../api/client'
+import type { RegistrationResponse } from '../api/types'
 import { useLastInput } from '../composables/useLastInput'
 import { useServerClock } from '../composables/useServerClock'
 import { formatKoreanDate, formatTimeHm, todayIsoLocal } from '../utils/format'
@@ -68,7 +68,6 @@ const submitting = ref(false)
 const formError = ref('')
 const statusMessage = ref('')
 const result = ref<RegistrationResponse | null>(null)
-const summary = ref<RegistrationSummary | null>(null)
 
 const classFieldRef = ref<InstanceType<typeof FormField> | null>(null)
 const nameFieldRef = ref<InstanceType<typeof FormField> | null>(null)
@@ -116,7 +115,6 @@ onMounted(() => {
     form.roomNumber = last.roomNumber
     statusMessage.value = '이전에 입력한 정보를 불러왔습니다.'
   }
-  void loadSummary()
 })
 
 // 마감 상태로 바뀌면 안내 문구를 갱신한다.
@@ -169,14 +167,6 @@ function focusField(key: FieldKey): void {
   roomFieldRef.value?.focus()
 }
 
-async function loadSummary(): Promise<void> {
-  try {
-    summary.value = await fetchRegistrationSummary()
-  } catch {
-    // 요약은 부가 정보이므로 실패해도 화면 동작에 영향을 주지 않는다.
-  }
-}
-
 async function onSubmit(): Promise<void> {
   if (!canSubmit.value) {
     return
@@ -214,7 +204,6 @@ async function onSubmit(): Promise<void> {
     statusMessage.value = response.duplicate
       ? '이미 등록되어 있습니다.'
       : `등록이 완료되었습니다. ${returnTimeLabel.value}에 복귀해 주세요.`
-    void loadSummary()
     await nextTick()
     focusResult()
   } catch (error) {
@@ -407,10 +396,6 @@ function clearSavedInput(): void {
 
       <section class="card card--flat" aria-labelledby="notice-title">
         <h2 id="notice-title" class="card__title">안내</h2>
-        <p v-if="summary" class="summary">
-          오늘 등록 인원
-          <strong class="summary__count tabular">{{ summary.count }}명</strong>
-        </p>
         <ul class="notice-list">
           <li>{{ closeTimeLabel }}까지 등록하면 잠시 뒤 사감 선생님께 명단이 전달됩니다.</li>
           <li>{{ curfewTimeLabel }} 이후 기숙사 문이 잠기며, {{ returnTimeLabel }}에 일괄 개방됩니다.</li>
@@ -437,22 +422,6 @@ function clearSavedInput(): void {
   display: flex;
   justify-content: center;
   margin: 0;
-}
-
-.summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
-  font-size: var(--fs-base);
-  color: var(--c-text-muted);
-}
-
-.summary__count {
-  font-size: var(--fs-lg);
-  font-weight: 800;
-  color: var(--c-text);
 }
 
 .notice-list {

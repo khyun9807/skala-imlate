@@ -13,6 +13,10 @@
 #     3) 기본 환경변수 JSON 배치 + SSM 로더 스크립트 설치
 #     4) systemd 유닛 등록 (imlate-env.service → imlate.service)
 #     5) nginx 설정 배치 (프론트 dist 서빙 + /api 리버스 프록시)
+#     6) TLS(Let's Encrypt) 스크립트 + 타이머 설치 — best-effort
+#
+#   ※ user_data 는 16KiB 제한이 있어 ec2 모듈에서 base64gzip 으로 압축해 넘긴다.
+#      cloud-init 이 gzip 사용자 데이터를 자동으로 해제한다.
 # =====================================================================
 set -euo pipefail
 exec > >(tee -a /var/log/imlate-bootstrap.log) 2>&1
@@ -27,6 +31,8 @@ ENV_FILE="${env_file}"
 LOG_DIR="${log_dir}"
 WEB_ROOT="${web_root}"
 APP_PORT="${app_port}"
+ACME_WEBROOT="${acme_webroot}"
+NGINX_SNIPPET_DIR="${nginx_snippet_dir}"
 
 log() {
   echo "[imlate-bootstrap] $(date -Is) $*"
@@ -44,6 +50,7 @@ install_packages() {
     java-21-amazon-corretto-headless \
     awscli-2 \
     python3 \
+    python3-pip \
     tar \
     gzip \
     rsync
@@ -245,10 +252,18 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# 5) nginx (프론트 dist 정적 서빙 + /api 리버스 프록시)
+# 5) nginx (프론트 dist 정적 서빙 + /api 리버스 프록시 + TLS 종단)
+#
+#    설정 파일 본문은 저장소의 infra/nginx/*.conf 를 그대로 심는다.
+#    deploy.sh 도 같은 파일을 배포하므로 부팅 직후와 배포 후 구성이 일치한다.
 # ---------------------------------------------------------------------
 %{ if install_nginx ~}
 dnf -y install nginx || log "nginx 설치 실패"
+
+# nginx 설치가 실패해도 아래 cat 이 set -e 로 부트스트랩 전체를 죽이지 않도록 디렉터리를 보장한다.
+install -d -o root -g root -m 0755 /etc/nginx/conf.d
+install -d -o root -g root -m 0755 "$NGINX_SNIPPET_DIR"
+install -d -o root -g root -m 0755 "$ACME_WEBROOT/.well-known/acme-challenge"
 
 cat > "$WEB_ROOT/index.html" <<'IMLATE_PLACEHOLDER'
 <!doctype html>
@@ -257,92 +272,19 @@ cat > "$WEB_ROOT/index.html" <<'IMLATE_PLACEHOLDER'
 <p>배포 대기 중입니다. deploy.sh 로 프론트엔드 dist 를 업로드하세요.</p>
 IMLATE_PLACEHOLDER
 
-cat > /etc/nginx/conf.d/imlate.conf <<'IMLATE_NGINX'
-# imlate — 프론트 정적 서빙 + 백엔드 리버스 프록시
-# nginx.conf 기본 server 블록보다 먼저 로드되므로 이 블록이 default_server 가 된다.
+cat > /etc/nginx/conf.d/imlate.conf <<'IMLATE_NGINX_MAIN'
+${nginx_conf}
+IMLATE_NGINX_MAIN
 
-limit_req_zone $binary_remote_addr zone=imlate_api:10m rate=10r/s;
-limit_req_status 429;
-limit_conn_zone $binary_remote_addr zone=imlate_conn:10m;
+cat > "$NGINX_SNIPPET_DIR/app-locations.conf" <<'IMLATE_NGINX_APP'
+${nginx_app_conf}
+IMLATE_NGINX_APP
 
-server {
-    listen       80 default_server;
-    listen       [::]:80 default_server;
-    server_name  _;
-
-    root  ${web_root};
-    index index.html;
-    charset utf-8;
-
-    client_max_body_size 1m;
-    client_body_timeout  10s;
-    client_header_timeout 10s;
-    limit_conn imlate_conn 40;
-
-    server_tokens off;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-
-    gzip on;
-    gzip_vary on;
-    gzip_min_length 1024;
-    gzip_comp_level 5;
-    gzip_proxied any;
-    gzip_types text/plain text/css text/javascript application/javascript application/json application/xml image/svg+xml font/woff font/woff2;
-
-    location /api/ {
-        limit_req zone=imlate_api burst=20 nodelay;
-
-        proxy_pass http://127.0.0.1:${app_port};
-        proxy_http_version 1.1;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host  $host;
-        proxy_connect_timeout 5s;
-        proxy_send_timeout    30s;
-        proxy_read_timeout    30s;
-        proxy_buffering on;
-    }
-
-    # ALB / 내부 헬스체크만 허용
-    location /actuator/health {
-        allow 10.0.0.0/8;
-        allow 172.16.0.0/12;
-        allow 192.168.0.0/16;
-        allow 127.0.0.1;
-        deny all;
-
-        access_log off;
-        proxy_pass http://127.0.0.1:${app_port}/actuator/health;
-        proxy_set_header Host $host;
-    }
-
-    # 해시가 붙은 빌드 산출물은 오래 캐시
-    location /assets/ {
-        expires 30d;
-        add_header Cache-Control "public, max-age=2592000, immutable";
-        try_files $uri =404;
-    }
-
-    location ~* \.(?:js|css|woff2?|ttf|otf|png|jpg|jpeg|gif|svg|webp|ico)$ {
-        expires 7d;
-        add_header Cache-Control "public, max-age=604800";
-        try_files $uri =404;
-    }
-
-    # SPA 진입점은 캐시하지 않는다(배포 즉시 반영)
-    location = /index.html {
-        add_header Cache-Control "no-cache, no-store, must-revalidate";
-    }
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-}
-IMLATE_NGINX
+# 인증서가 아직 없으므로 평문 모드로 시작한다(imlate-tls-sync.sh 가 나중에 바꾼다).
+cat > "$NGINX_SNIPPET_DIR/http-mode-plain.conf" <<IMLATE_NGINX_MODE
+# 부트스트랩이 놓은 초기 상태입니다. imlate-tls-sync.sh 가 관리합니다.
+include $NGINX_SNIPPET_DIR/app-locations.conf;
+IMLATE_NGINX_MODE
 
 if nginx -t; then
   systemctl enable --now nginx
@@ -354,7 +296,48 @@ fi
 %{ endif ~}
 
 # ---------------------------------------------------------------------
-# 6) CloudWatch Agent (메모리/디스크 지표 + 애플리케이션 로그)
+# 6) TLS (Let's Encrypt) — best-effort
+#
+#    발급 실패가 부팅 실패나 서비스 중단으로 이어지면 안 되므로, 여기서는
+#    스크립트/타이머만 설치하고 실제 발급은 타이머에 맡긴다.
+#    (부팅 시점에는 EIP 연결·DNS 전파가 끝나지 않았을 수 있다.)
+# ---------------------------------------------------------------------
+cat > "$ENV_DIR/tls.env" <<IMLATE_TLS_ENV
+# terraform user_data 가 생성한 파일입니다. 직접 수정하지 마세요.
+IMLATE_TLS_ENABLED="${enable_tls}"
+IMLATE_TLS_DOMAINS="${tls_domains}"
+IMLATE_TLS_EMAIL="${tls_contact_email}"
+IMLATE_ACME_WEBROOT="$ACME_WEBROOT"
+IMLATE_NGINX_SNIPPET_DIR="$NGINX_SNIPPET_DIR"
+IMLATE_TLS_ENV
+chmod 0644 "$ENV_DIR/tls.env"
+
+cat > /usr/local/bin/imlate-tls-sync.sh <<'IMLATE_TLS_SYNC'
+${tls_sync_script}
+IMLATE_TLS_SYNC
+chmod 0755 /usr/local/bin/imlate-tls-sync.sh
+
+cat > /usr/local/bin/imlate-tls.sh <<'IMLATE_TLS_MAIN'
+${tls_script}
+IMLATE_TLS_MAIN
+chmod 0755 /usr/local/bin/imlate-tls.sh
+
+cat > /etc/systemd/system/imlate-tls.service <<'IMLATE_TLS_UNIT'
+${tls_service_unit}
+IMLATE_TLS_UNIT
+
+cat > /etc/systemd/system/imlate-tls.timer <<'IMLATE_TLS_TIMER'
+${tls_timer_unit}
+IMLATE_TLS_TIMER
+
+systemctl daemon-reload
+%{ if install_nginx ~}
+systemctl enable --now imlate-tls.timer || log "imlate-tls.timer 활성화 실패(무시)"
+log "TLS 타이머 설치 완료 (enable_tls=${enable_tls}, domains=${tls_domains})"
+%{ endif ~}
+
+# ---------------------------------------------------------------------
+# 7) CloudWatch Agent (메모리/디스크 지표 + 애플리케이션 로그)
 # ---------------------------------------------------------------------
 %{ if install_cloudwatch_agent ~}
 if dnf -y install amazon-cloudwatch-agent; then
@@ -412,7 +395,7 @@ fi
 %{ endif ~}
 
 # ---------------------------------------------------------------------
-# 7) 애플리케이션 기동 (jar 이 이미 있는 경우에만)
+# 8) 애플리케이션 기동 (jar 이 이미 있는 경우에만)
 # ---------------------------------------------------------------------
 if [ -f "$JAR_PATH" ]; then
   systemctl restart imlate.service || log "imlate 기동 실패 — journalctl -u imlate 확인"

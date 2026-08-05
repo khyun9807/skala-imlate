@@ -1,12 +1,14 @@
 /**
  * 백엔드 없이 E2E 를 돌리기 위한 `/api/v1/**` 목(mock) 계층.
  *
- * SPEC §5.5 / §7.3 의 응답 스키마를 그대로 흉내 낸다.
+ * 화면이 실제로 쓰는 엔드포인트만 흉내 낸다.
  * - `GET  /registrations/window`  등록 창(열림 / 마감)
- * - `GET  /registrations/summary` 오늘 등록 인원 요약
  * - `POST /registrations`         신규 / 중복 / 마감(409) / 과다요청(429) / 검증실패(400) / 서버오류(500)
  * - `GET  /lookup`                사감용 명단 12명 / 빈 명단 / 권한 없음(403)
- * - `GET  /stats/summary`         공개 통계
+ *
+ * `/registrations/summary`(인원 수)와 `/stats/summary`(통계)는 **화면에서 호출하지 않기로 했으므로**
+ * 일부러 목킹하지 않는다. 실수로 다시 호출하면 404 로 떨어지고 `handledPaths` 에 남아 테스트가 잡아낸다.
+ * (`FORBIDDEN_PATHS` 참고)
  *
  * 시간에 의존하는 화면(카운트다운·날짜 문구)을 고정하기 위해 `page.clock.setFixedTime()` 도 함께 건다.
  */
@@ -52,8 +54,11 @@ export type RegisterScenario =
 /** `GET /lookup` 응답 시나리오 */
 export type LookupScenario = 'ok' | 'empty' | 'forbidden' | 'serverError'
 
-/** 대사(검증) 결과 상태 */
-export type VerificationStatus = 'CONSISTENT' | 'RECOVERED' | 'MISMATCH' | 'WAL_UNAVAILABLE'
+/**
+ * 화면이 **절대 호출하면 안 되는** API 경로.
+ * 검증(대사)·통계는 뒤에서 기록만 하고 사용자에게 보여 주지 않기로 했다.
+ */
+export const FORBIDDEN_PATHS = ['/registrations/summary', '/stats/summary'] as const
 
 /** 목킹 옵션 */
 export interface MockOptions {
@@ -63,10 +68,6 @@ export interface MockOptions {
   register?: RegisterScenario
   /** 조회 응답 (기본 ok) */
   lookup?: LookupScenario
-  /** 조회 화면 검증 배지 상태 (기본 CONSISTENT) */
-  verification?: VerificationStatus
-  /** 오늘 등록 인원 요약 값 (기본 12) */
-  summaryCount?: number
   /** 명단 데이터 종류. `long` 은 모든 값이 최대 길이(20자)인 최악 케이스 */
   roster?: 'default' | 'long'
 }
@@ -137,24 +138,6 @@ export const TEST_BY_CLASS = summarizeByClass(TEST_ROSTER)
 /** 호수별 인원 요약 (기본 명단에서 자동 계산) */
 export const TEST_BY_ROOM = summarizeByRoom(TEST_ROSTER)
 
-/** 공개 통계 고정값 */
-export const TEST_STATS = {
-  totalVisitors: 540,
-  todayVisitors: 88,
-  totalPageViews: 2_130,
-  todayPageViews: 210,
-  todayRegistrations: 12,
-  totalRegistrations: 320,
-}
-
-/** 검증 배지 상태 → 화면 문구 (StatusBadge.vue 와 동일해야 한다) */
-export const VERIFICATION_LABELS: Record<VerificationStatus, string> = {
-  CONSISTENT: '검증 일치',
-  RECOVERED: '누락 복구 완료',
-  MISMATCH: '차이 확인 필요',
-  WAL_UNAVAILABLE: '검증 불가',
-}
-
 /** 429 응답이 알려주는 재시도 대기 초 */
 export const RETRY_AFTER_SECONDS = 30
 
@@ -170,8 +153,6 @@ export async function installApiMocks(page: Page, options: MockOptions = {}): Pr
   let windowScenario: WindowScenario = options.window ?? 'open'
   let registerScenario: RegisterScenario = options.register ?? 'created'
   const lookupScenario: LookupScenario = options.lookup ?? 'ok'
-  const verification: VerificationStatus = options.verification ?? 'CONSISTENT'
-  const summaryCount = options.summaryCount ?? TEST_ROSTER.length
   const roster = options.roster === 'long' ? LONG_ROSTER : TEST_ROSTER
 
   // 시계 고정: 카운트다운·날짜 문구가 실행 시각과 무관하게 항상 같은 값이 되도록 한다.
@@ -190,12 +171,6 @@ export async function installApiMocks(page: Page, options: MockOptions = {}): Pr
       return
     }
 
-    // --- 등록 인원 요약 -------------------------------------------------
-    if (path.endsWith('/registrations/summary')) {
-      await json(route, 200, { date: TEST_DATE, count: summaryCount, open: windowScenario === 'open' })
-      return
-    }
-
     // --- 등록 ----------------------------------------------------------
     if (path.endsWith('/registrations') && request.method() === 'POST') {
       const payload = readPayload(request.postData())
@@ -206,17 +181,12 @@ export async function installApiMocks(page: Page, options: MockOptions = {}): Pr
 
     // --- 사감 조회 ------------------------------------------------------
     if (path.endsWith('/lookup')) {
-      await respondLookup(route, lookupScenario, verification, roster, path)
-      return
-    }
-
-    // --- 공개 통계 ------------------------------------------------------
-    if (path.endsWith('/stats/summary')) {
-      await json(route, 200, TEST_STATS)
+      await respondLookup(route, lookupScenario, roster, path)
       return
     }
 
     // 목이 준비되지 않은 경로는 조용히 넘어가지 않고 404 로 드러낸다.
+    // (`/registrations/summary`, `/stats/summary` 도 여기로 떨어진다 — 의도된 동작이다.)
     await json(route, 404, errorBody('NOT_FOUND', `목킹되지 않은 API 경로입니다: ${path}`, path))
   })
 
@@ -313,7 +283,6 @@ async function respondRegister(
 async function respondLookup(
   route: Route,
   scenario: LookupScenario,
-  verification: VerificationStatus,
   roster: RosterEntry[],
   path: string,
 ): Promise<void> {
@@ -327,6 +296,7 @@ async function respondLookup(
   }
 
   const items = scenario === 'empty' ? [] : roster
+  // 새 계약: verification / stats 필드는 응답에 없다.
   await json(route, 200, {
     date: TEST_DATE,
     generatedAt: `${TEST_DATE}T22:10:00+09:00`,
@@ -336,33 +306,7 @@ async function respondLookup(
     items,
     byClass: summarizeByClass(items),
     byRoom: summarizeByRoom(items),
-    verification: verificationPayload(verification, items.length),
-    stats: { ...TEST_STATS, todayRegistrations: items.length },
   })
-}
-
-/** 검증(대사) 결과 본문. 상태별로 차이 항목을 다르게 채운다. */
-export function verificationPayload(status: VerificationStatus, dbCount: number): Record<string, unknown> {
-  const base = {
-    status,
-    dbCount,
-    walCount: dbCount,
-    recoveredCount: 0,
-    walOnly: [] as string[],
-    dbOnly: [] as string[],
-    checkedAt: `${TEST_DATE}T22:10:00+09:00`,
-  }
-  switch (status) {
-    case 'RECOVERED':
-      return { ...base, recoveredCount: 1, walCount: dbCount }
-    case 'MISMATCH':
-      return { ...base, walCount: Math.max(0, dbCount - 1), dbOnly: ['3반/서준호/503'] }
-    case 'WAL_UNAVAILABLE':
-      return { ...base, walCount: 0 }
-    case 'CONSISTENT':
-    default:
-      return base
-  }
 }
 
 // ------------------------------------------------------------------ 내부 유틸

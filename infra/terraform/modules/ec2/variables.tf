@@ -61,11 +61,6 @@ variable "associate_public_ip" {
   default     = false
 }
 
-variable "associate_elastic_ip" {
-  description = "고정 EIP 할당 여부"
-  type        = bool
-  default     = false
-}
 
 variable "detailed_monitoring" {
   description = "CloudWatch 상세 모니터링(1분 간격) 사용 여부"
@@ -161,6 +156,79 @@ variable "install_cloudwatch_agent" {
   description = "CloudWatch Agent 설치 여부"
   type        = bool
   default     = true
+}
+
+# ---------------- TLS (Let's Encrypt, nginx 직접 종단) ----------------
+variable "enable_tls" {
+  description = <<-EOT
+    Let's Encrypt 인증서를 발급받아 nginx 443 을 켤지 여부.
+    발급은 **best-effort** 다 — 실패해도 부트스트랩은 성공으로 끝나고 nginx 는 80 으로 계속 서비스한다.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "tls_domains" {
+  description = "인증서에 넣을 도메인 목록(첫 번째가 primary). 비면 TLS 를 시도하지 않는다."
+  type        = list(string)
+  default     = []
+}
+
+variable "tls_contact_email" {
+  description = "Let's Encrypt 계정 이메일(만료 알림 수신). 비우면 --register-unsafely-without-email 로 등록한다."
+  type        = string
+  default     = ""
+}
+
+variable "acme_webroot" {
+  description = "ACME HTTP-01 챌린지 파일을 놓을 webroot 디렉터리(nginx 가 /.well-known/acme-challenge/ 로 서빙)"
+  type        = string
+  default     = "/var/www/acme"
+}
+
+variable "nginx_snippet_dir" {
+  description = "nginx include 조각(app-locations.conf, tls-server.conf 등)을 놓을 디렉터리"
+  type        = string
+  default     = "/etc/nginx/imlate"
+}
+
+# ---------------- 부팅 시 심을 설정 파일 원본 ----------------
+#   루트 모듈이 file() 로 읽어 넘긴다. 저장소의 infra/ 파일이 유일한 원본이고,
+#   deploy.sh 도 같은 파일을 배포하므로 부팅 직후와 배포 후 상태가 일치한다.
+variable "nginx_conf" {
+  description = "infra/nginx/imlate.conf 내용 (→ /etc/nginx/conf.d/imlate.conf)"
+  type        = string
+  default     = ""
+}
+
+variable "nginx_app_conf" {
+  description = "infra/nginx/imlate-app.conf 내용 (→ /etc/nginx/imlate/app-locations.conf)"
+  type        = string
+  default     = ""
+}
+
+variable "tls_script" {
+  description = "infra/scripts/imlate-tls.sh 내용 (→ /usr/local/bin/imlate-tls.sh)"
+  type        = string
+  default     = ""
+}
+
+variable "tls_sync_script" {
+  description = "infra/scripts/imlate-tls-sync.sh 내용 (→ /usr/local/bin/imlate-tls-sync.sh)"
+  type        = string
+  default     = ""
+}
+
+variable "tls_service_unit" {
+  description = "infra/systemd/imlate-tls.service 내용"
+  type        = string
+  default     = ""
+}
+
+variable "tls_timer_unit" {
+  description = "infra/systemd/imlate-tls.timer 내용"
+  type        = string
+  default     = ""
 }
 
 variable "default_env" {

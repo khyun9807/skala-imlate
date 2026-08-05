@@ -8,6 +8,7 @@
  * - 과다 요청(429) 안내
  * - 클라이언트 검증 실패 시 제출 차단
  * - 서버 마감 응답(409) 안내
+ * - 오늘 등록 인원(카운트)·통계는 **화면에 보이지 않는다** (사용자 피드백 1·2번, 회귀 방지)
  */
 
 import { expect, test } from '@playwright/test'
@@ -15,6 +16,7 @@ import type { Page } from '@playwright/test'
 
 import {
   CLOSE_TIME_LABEL,
+  FORBIDDEN_PATHS,
   RETRY_AFTER_SECONDS,
   RETURN_TIME_LABEL,
   TEST_DATE_LABEL,
@@ -56,12 +58,11 @@ test.describe('등록 화면 기본 표시', () => {
     await expect(page.getByRole('timer')).toContainText('1시간 00분 00초')
     await expect(page.getByText(`${RETURN_TIME_LABEL} 일괄 복귀`)).toBeVisible()
     await expect(page.getByRole('button', { name: SUBMIT_NAME })).toBeEnabled()
-    await expect(page.getByText('오늘 등록 인원')).toContainText('12명')
   })
 
   test('모든 API 요청에 X-Visitor-Id 헤더가 실린다 (SPEC §7.1)', async ({ page }) => {
     const mock = await openRegister(page)
-    await expect(page.getByText('오늘 등록 인원')).toBeVisible()
+    await expect(page.getByRole('timer')).toContainText('1시간 00분 00초')
 
     await fillForm(page, '1반', '홍길동', '302')
     await page.getByRole('button', { name: SUBMIT_NAME }).click()
@@ -75,6 +76,42 @@ test.describe('등록 화면 기본 표시', () => {
     }
     // 방문자 식별자는 세션 내내 동일해야 통계(UV)가 정확하다.
     expect(new Set(mock.visitorIds).size).toBe(1)
+  })
+})
+
+test.describe('인원 수·통계 비노출 (회귀 방지)', () => {
+  /**
+   * 사용자 피드백 1·2번: 등록 화면에는 "필요한 정보만" 보이고, 집계·통계는 보이지 않는다.
+   * 백엔드도 `/registrations/summary` 에서 count 를 빼고 `/stats/summary` 를 관리자 전용으로 바꿨다.
+   */
+  const FORBIDDEN_TEXTS = ['오늘 등록 인원', '등록 인원', '방문자', '통계', '검증 결과', 'WAL', '복구 처리']
+
+  test('등록 화면에는 인원 수·통계 문구가 없다', async ({ page }) => {
+    await openRegister(page)
+    await expect(page.getByRole('timer')).toContainText('1시간 00분 00초')
+
+    for (const text of FORBIDDEN_TEXTS) {
+      await expect(page.getByText(text), `화면에 남아 있으면 안 되는 문구: ${text}`).toHaveCount(0)
+    }
+  })
+
+  test('등록 전후 어느 시점에도 요약·통계 API 를 호출하지 않는다', async ({ page }) => {
+    const mock = await openRegister(page)
+
+    await fillForm(page, '1반', '홍길동', '302')
+    await page.getByRole('button', { name: SUBMIT_NAME }).click()
+    await expect(page.getByRole('heading', { name: '등록이 완료되었습니다' })).toBeVisible()
+
+    for (const forbidden of FORBIDDEN_PATHS) {
+      expect(
+        mock.handledPaths.some((path) => path.endsWith(forbidden)),
+        `호출되면 안 되는 API: ${forbidden} (실제 호출: ${mock.handledPaths.join(', ')})`,
+      ).toBe(false)
+    }
+    // 화면이 실제로 쓰는 엔드포인트는 등록 창과 등록뿐이다.
+    expect(new Set(mock.handledPaths.map((path) => path.replace('/api/v1', '')))).toEqual(
+      new Set(['/registrations/window', '/registrations']),
+    )
   })
 })
 

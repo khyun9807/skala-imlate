@@ -43,13 +43,6 @@ export interface RegistrationResponse {
   returnTime: string
 }
 
-/** `GET /registrations/summary` — PII 없는 공개 요약 */
-export interface RegistrationSummary {
-  date: string
-  count: number
-  open: boolean
-}
-
 /** 조회 페이지 명단 한 줄 */
 export interface LookupItem {
   no: number
@@ -71,32 +64,12 @@ export interface RoomCount {
   count: number
 }
 
-/** WAL ↔ DB 대사 결과 상태 */
-export type VerificationStatus = 'CONSISTENT' | 'RECOVERED' | 'MISMATCH' | 'WAL_UNAVAILABLE'
-
-/** 대사(검증) 결과 */
-export interface VerificationReport {
-  status: VerificationStatus
-  dbCount: number
-  walCount: number
-  recoveredCount: number
-  /** `1반/홍길동/302` 형태 */
-  walOnly: string[]
-  dbOnly: string[]
-  checkedAt: string
-}
-
-/** 방문/등록 통계 스냅샷 */
-export interface StatsSnapshot {
-  totalVisitors: number
-  todayVisitors: number
-  totalPageViews: number
-  todayPageViews: number
-  todayRegistrations: number
-  totalRegistrations: number
-}
-
-/** `GET /lookup?date=&token=` 응답 */
+/**
+ * `GET /lookup?date=&token=` 응답.
+ *
+ * 대사(검증) 결과와 방문/등록 통계는 화면에 노출하지 않기로 해 응답에서 빠졌다.
+ * 서버는 그대로 기록만 남긴다.
+ */
 export interface LookupResponse {
   date: string
   generatedAt: string
@@ -106,8 +79,6 @@ export interface LookupResponse {
   items: LookupItem[]
   byClass: ClassCount[]
   byRoom: RoomCount[]
-  verification: VerificationReport
-  stats: StatsSnapshot
 }
 
 /** 서버 에러 응답 바디 (`common.error.ErrorResponse`) */
