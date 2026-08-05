@@ -7,7 +7,16 @@
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#14171b" media="(prefers-color-scheme: dark)" />
-    <meta name="description" content="기숙사 야간 복귀(23:30) 등록 시스템. 22:00까지 반·이름·호수를 등록하세요." />
+    <!--
+      링크 미리보기(카카오톡·슬랙 등)에 뜨는 설명이다. 정적 HTML 이라 서버 설정을 읽지 못하므로
+      마감 시각이 여기에 박혀 있다. `imlate.registration.close-time` 을 바꾸면 **이 줄도 함께 고쳐야 한다.**
+      (화면 안의 시각은 서버 window 응답을 쓰므로 자동으로 따라간다 — 여기만 예외다)
+    -->
+    <meta name="description" content="기숙사 야간 복귀(23:30) 등록 시스템. 21:45까지 반·이름·호수를 등록하세요." />
+    <meta property="og:title" content="기숙사 야간 복귀 등록" />
+    <meta property="og:description" content="21:45까지 등록하면 23:30 일괄 개방 때 함께 입관합니다. 반·이름·호수를 입력하세요." />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="ko_KR" />
     <meta name="format-detection" content="telephone=no" />
     <meta name="robots" content="noindex, nofollow" />
     <link
