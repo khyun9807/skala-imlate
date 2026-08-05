@@ -208,7 +208,7 @@ const ROOM_NEIGHBOR = 'LTN001'                                   // §3B 옆자�
 const ROOM_OTHER_LINE = 'LTN002'                                 // §3C 폭주 회선과 다른 회선의 사용자
 const ROOM_FLOOD = 'LTF001'                                      // §3C 폭주 중 등록 시도
 const ROOM_CANARY = 'LTC001'                                     // 사전 점검용 카나리아
-const CLASSES = ['1반', '2반', '3반', '4반', '5반', '6반', '7반', '8반']
+const CLASSES = ['1', '2', '3', '4', '5', '6', '7', '8']
 
 /** 부하 발생용 가짜 클라이언트 IP. 전부 10.* 대역이라 로그에서 구분하기 쉽다. */
 const WIFI_IP = '10.77.255.1'   // §1B 공용 와이파이 — 전원이 공유하는 하나의 공인 IP
@@ -792,7 +792,7 @@ async function phaseRace(date) {
   info('여기서 확인할 것은 "통과한 요청들 사이에서 중복 행이 생기지 않는가" 이다.')
   clearRateLimits()
 
-  const person = { className: '9반', studentName: '동시등록', roomNumber: ROOM_RACE, cancelPassword: LOAD_CANCEL_PASSWORD }
+  const person = { className: '9', studentName: '동시등록', roomNumber: ROOM_RACE, cancelPassword: LOAD_CANCEL_PASSWORD }
   const m = newMetrics(`동일인 동시 등록 ${RACE_REQUESTS}건`)
 
   // 진짜 "동시"를 만들기 위해 풀을 쓰지 않고 한꺼번에 발사한다.
@@ -841,7 +841,7 @@ async function phasePersonSpam(date) {
   info('IP 는 같지만 이쪽은 반드시 429 가 나야 한다. 이것이 "둘 다 적용"의 존재 이유다.')
   clearRateLimits()
 
-  const person = { className: '9반', studentName: '도배사용자', roomNumber: ROOM_SPAM, cancelPassword: LOAD_CANCEL_PASSWORD }
+  const person = { className: '9', studentName: '도배사용자', roomNumber: ROOM_SPAM, cancelPassword: LOAD_CANCEL_PASSWORD }
   const m = newMetrics(`동일인 반복 제출 (같은 IP ${SPAM_IP})`)
   const started = performance.now()
   let firstBlockedAt = 0
@@ -879,7 +879,7 @@ async function phasePersonSpam(date) {
   info('공용 와이파이에서 한 명이 도배해도 나머지 199명은 등록할 수 있어야 한다.')
   const neighbor = await call('POST', '/registrations', {
     ip: SPAM_IP, visitor: 'neighbor',
-    body: { className: '9반', studentName: '옆자리사용자', roomNumber: ROOM_NEIGHBOR, cancelPassword: LOAD_CANCEL_PASSWORD },
+    body: { className: '9', studentName: '옆자리사용자', roomNumber: ROOM_NEIGHBOR, cancelPassword: LOAD_CANCEL_PASSWORD },
   })
   check('★ 도배 차단 중에도 같은 IP 의 다른 사람은 정상 등록(201)', neighbor.status === 201,
     `status=${neighbor.status} ${neighbor.text.slice(0, 140)}`
@@ -921,7 +921,7 @@ async function phaseLineFlood(date, state) {
   // 폭주 회선에서는 등록도 막혀 있어야 한다(같은 IP 버킷을 공유한다).
   const blockedRegister = await call('POST', '/registrations', {
     ip: FLOOD_IP, visitor: 'flood-bot',
-    body: { className: '9반', studentName: '폭주회선', roomNumber: ROOM_FLOOD, cancelPassword: LOAD_CANCEL_PASSWORD },
+    body: { className: '9', studentName: '폭주회선', roomNumber: ROOM_FLOOD, cancelPassword: LOAD_CANCEL_PASSWORD },
   })
   check('폭주로 소진된 회선에서는 등록도 차단된다(429)', blockedRegister.status === 429,
     `status=${blockedRegister.status}`)
@@ -932,7 +932,7 @@ async function phaseLineFlood(date, state) {
     // IP 단위 격리: 폭주 회선을 막아도 다른 회선은 멀쩡해야 한다.
     const other = await call('POST', '/registrations', {
       ip: CLEAN_IP, visitor: 'clean-line',
-      body: { className: '9반', studentName: '다른회선사용자', roomNumber: ROOM_OTHER_LINE, cancelPassword: LOAD_CANCEL_PASSWORD },
+      body: { className: '9', studentName: '다른회선사용자', roomNumber: ROOM_OTHER_LINE, cancelPassword: LOAD_CANCEL_PASSWORD },
     })
     check('폭주 회선을 차단해도 다른 IP 는 정상 등록(201)', other.status === 201,
       `status=${other.status} ${other.text.slice(0, 120)}`)

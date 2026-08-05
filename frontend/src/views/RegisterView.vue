@@ -22,6 +22,7 @@ import { ApiError, createRegistration } from '../api/client'
 import type { RegistrationResponse } from '../api/types'
 import { useLastInput } from '../composables/useLastInput'
 import { useServerClock } from '../composables/useServerClock'
+import { useYesterdayNote } from '../composables/useYesterdayNote'
 import {
   addDaysIso,
   formatClockTime,
@@ -32,8 +33,14 @@ import {
   todayIsoLocal,
 } from '../utils/format'
 
-/** 서버 검증 규칙과 동일한 허용 문자 (SPEC §5.5) */
-const ALLOWED_PATTERN = /^[가-힣A-Za-z0-9 ()\-]{1,20}$/
+/**
+ * 서버 검증 규칙과 동일한 허용 문자 (SPEC §5.5).
+ *
+ * 반·기숙사 호수는 숫자만, 이름은 글자만(한글·영문) 받는다.
+ * 이름에만 글자 사이 공백 한 칸을 허용한다 — "Alice Kim" 처럼 띄어 쓰는 이름이 있다.
+ */
+const DIGITS_PATTERN = /^[0-9]{1,20}$/
+const NAME_PATTERN = /^[가-힣A-Za-z]+( [가-힣A-Za-z]+)*$/
 const MAX_LENGTH = 20
 
 /** 취소 비밀번호 자릿수. 서버 `imlate.registration.cancel.password-length` 와 같아야 한다. */
@@ -56,9 +63,17 @@ const TOO_LONG_MESSAGES: Record<FieldKey, string> = {
   cancelPassword: `비밀번호는 숫자 ${PASSWORD_LENGTH}자리로 입력해 주세요.`,
 }
 
-const PATTERN_MESSAGE = '한글·영문·숫자와 공백, 괄호( ), 하이픈(-)만 사용할 수 있습니다.'
+const PATTERN_MESSAGES: Record<FieldKey, string> = {
+  className: '반은 숫자만 입력해 주세요.',
+  studentName: '이름에는 한글·영문만 사용할 수 있습니다.',
+  roomNumber: '기숙사 호수는 숫자만 입력해 주세요.',
+  cancelPassword: '',
+}
 
 const FIELD_KEYS: FieldKey[] = ['className', 'studentName', 'roomNumber', 'cancelPassword']
+
+/** 숫자만 받는 필드. 입력 순간에 숫자가 아닌 글자를 걸러낸다. */
+const DIGIT_FIELDS: FieldKey[] = ['className', 'roomNumber']
 
 const {
   windowInfo,
@@ -79,6 +94,9 @@ const {
   remember,
   clearSaved,
 } = useLastInput()
+
+/** 어제 연장 복귀 인원 한 줄. 인원이 0이거나 못 불러오면 빈 문자열이라 화면에 나오지 않는다. */
+const { message: yesterdayMessage } = useYesterdayNote()
 
 const form = reactive<Record<FieldKey, string>>({
   className: '',
@@ -204,8 +222,9 @@ function validateField(key: FieldKey): string {
   if (value.length > MAX_LENGTH) {
     return TOO_LONG_MESSAGES[key]
   }
-  if (!ALLOWED_PATTERN.test(value)) {
-    return PATTERN_MESSAGE
+  const pattern = key === 'studentName' ? NAME_PATTERN : DIGITS_PATTERN
+  if (!pattern.test(value)) {
+    return PATTERN_MESSAGES[key]
   }
   return ''
 }
@@ -216,9 +235,19 @@ function onFieldBlur(key: FieldKey): void {
 }
 
 function onFieldInput(key: FieldKey, value: string): void {
-  // 비밀번호 칸에서는 숫자가 아닌 글자를 아예 받지 않는다. 모바일 자판 특성상
-  // 오타가 잦은데, 나중에 취소하려 할 때야 "틀렸다"고 알게 되면 되돌릴 방법이 없다.
-  form[key] = key === 'cancelPassword' ? value.replace(/\D/g, '').slice(0, PASSWORD_LENGTH) : value
+  // 숫자만 받는 칸(비밀번호·반·호수)은 입력 순간에 숫자가 아닌 글자를 걸러낸다.
+  // 나중에 오류 문구로 알려 주는 것보다 애초에 들어가지 않게 하는 편이 낫다.
+  //
+  // **이름 칸에는 절대 이 필터를 걸지 않는다.** 한글은 자판을 누르는 동안
+  // ㅎ → 호 → 홍 처럼 조합 중간 상태를 거치는데, 그 순간마다 글자를 걸러내면
+  // 조합이 깨져서 한글을 아예 입력할 수 없게 된다. 이름은 blur/제출 시점에만 검사한다.
+  if (key === 'cancelPassword') {
+    form[key] = value.replace(/\D/g, '').slice(0, PASSWORD_LENGTH)
+  } else if (DIGIT_FIELDS.includes(key)) {
+    form[key] = value.replace(/\D/g, '').slice(0, MAX_LENGTH)
+  } else {
+    form[key] = value
+  }
   if (touched[key]) {
     errors[key] = validateField(key)
   }
@@ -448,10 +477,10 @@ function clearSavedInput(): void {
             :error="errors.className"
             :suggestions="classSuggestions"
             :disabled="isClosed || submitting"
-            placeholder="예: 1반"
-            hint="교육과정에서 사용하는 반 이름을 적어 주세요."
+            placeholder="예: 1"
+            hint="반 번호를 숫자로만 적어 주세요."
             autocomplete="off"
-            inputmode="text"
+            inputmode="numeric"
             enterkeyhint="next"
             @update:model-value="(value: string) => onFieldInput('className', value)"
             @blur="onFieldBlur('className')"
@@ -466,6 +495,7 @@ function clearSavedInput(): void {
             :suggestions="nameSuggestions"
             :disabled="isClosed || submitting"
             placeholder="예: 홍길동"
+            hint="한글 또는 영문 이름만 입력할 수 있습니다."
             autocomplete="name"
             inputmode="text"
             enterkeyhint="next"
@@ -482,10 +512,10 @@ function clearSavedInput(): void {
             :suggestions="roomSuggestions"
             :disabled="isClosed || submitting"
             placeholder="예: 302"
-            hint="숫자만 또는 동·호수 형태 모두 입력할 수 있습니다."
+            hint="호수를 숫자로만 적어 주세요."
             autocomplete="off"
-            inputmode="text"
-            enterkeyhint="done"
+            inputmode="numeric"
+            enterkeyhint="next"
             @update:model-value="(value: string) => onFieldInput('roomNumber', value)"
             @blur="onFieldBlur('roomNumber')"
           />
@@ -546,6 +576,12 @@ function clearSavedInput(): void {
           <li>등록 정보는 사감 선생님 확인 목적으로만 사용됩니다.</li>
         </ul>
       </section>
+
+      <!--
+        어제 연장 복귀 인원 한 줄. 부가 정보라 눈에 띄지 않게 맨 아래 작은 글씨로 둔다.
+        인원이 0이거나 값을 못 불러오면 message 가 빈 문자열이라 아예 그려지지 않는다.
+      -->
+      <p v-if="yesterdayMessage" class="yesterday-note no-print">{{ yesterdayMessage }}</p>
     </div>
   </main>
 </template>
@@ -612,5 +648,19 @@ function clearSavedInput(): void {
 .closed-list__lead {
   font-size: var(--fs-base);
   font-weight: 700;
+}
+
+/*
+  어제 인원 한 줄. 등록에 필요한 정보가 아니라 곁들이는 말이므로
+  카드도 테두리도 없이, 화면 맨 아래에 흐린 작은 글씨로만 둔다.
+*/
+.yesterday-note {
+  margin: 0;
+  padding: 0 var(--space-2);
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--c-text-faint);
+  line-height: 1.6;
+  word-break: keep-all;
 }
 </style>

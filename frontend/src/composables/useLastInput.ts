@@ -107,25 +107,51 @@ function loadRecentInputs(): SavedInput[] {
   return result
 }
 
+/** 반·기숙사 호수 규칙 — 숫자만. 화면·서버 검증과 같은 규칙이어야 한다. */
+const DIGITS_PATTERN = /^[0-9]{1,20}$/
+
+/** 이름 규칙 — 글자만(한글·영문), 글자 사이 공백 한 칸 허용. */
+const NAME_PATTERN = /^[가-힣A-Za-z]+( [가-힣A-Za-z]+)*$/
+
 function toSavedInput(value: unknown): SavedInput | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return null
   }
   const record = value as Record<string, unknown>
-  const className = typeof record.className === 'string' ? record.className.trim() : ''
   const studentName = typeof record.studentName === 'string' ? record.studentName.trim() : ''
-  const roomNumber = typeof record.roomNumber === 'string' ? record.roomNumber.trim() : ''
+
+  // 반·호수는 숫자만 남긴다.
+  //
+  // **왜 버리지 않고 고쳐 쓰는가** — 입력 규칙이 "숫자만"으로 바뀌기 전에 저장된 값은
+  // "1반", "302호" 같은 형태다. 그대로 채우면 사용자는 자기가 건드리지도 않은 칸에서
+  // 갑자기 오류 문구를 보게 되고, 무엇을 고쳐야 하는지 알기 어렵다.
+  // 숫자만 뽑아내면 "1반" → "1", "302호" → "302" 로 사용자가 의도했던 값이 그대로 남는다.
+  const className = extractDigits(record.className)
+  const roomNumber = extractDigits(record.roomNumber)
+
   return { className, studentName, roomNumber }
 }
 
+/** 문자열에서 숫자만 뽑아낸다(최대 20자). 문자열이 아니면 빈 값. */
+function extractDigits(value: unknown): string {
+  if (typeof value !== 'string') {
+    return ''
+  }
+  return value.replace(/\D/g, '').slice(0, 20)
+}
+
+/**
+ * 저장·복원할 값으로 쓸 수 있는지 검사한다.
+ *
+ * 이름은 고쳐 쓸 방법이 없으므로(글자를 지우면 다른 이름이 된다) 규칙에 맞지 않으면
+ * 그 저장분 자체를 버린다 — 잘못된 이름을 자동으로 채워 주는 것보다 빈 칸이 낫다.
+ */
 function isValidSavedInput(input: SavedInput): boolean {
   return (
-    input.className.length > 0 &&
-    input.className.length <= 20 &&
-    input.studentName.length > 0 &&
+    DIGITS_PATTERN.test(input.className) &&
+    NAME_PATTERN.test(input.studentName) &&
     input.studentName.length <= 20 &&
-    input.roomNumber.length > 0 &&
-    input.roomNumber.length <= 20
+    DIGITS_PATTERN.test(input.roomNumber)
   )
 }
 

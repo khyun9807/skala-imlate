@@ -83,7 +83,7 @@ test.describe('등록 화면 기본 표시', () => {
     const mock = await openRegister(page)
     await expect(page.getByRole('timer')).toContainText(OPEN_COUNTDOWN_LABEL)
 
-    await fillForm(page, '1반', '홍길동', '302')
+    await fillForm(page, '1', '홍길동', '302')
     await page.getByRole('button', { name: SUBMIT_NAME }).click()
     await expect(page.getByRole('heading', { name: '등록이 완료되었습니다' })).toBeVisible()
 
@@ -216,7 +216,7 @@ test.describe('인원 수·통계 비노출 (회귀 방지)', () => {
   test('등록 전후 어느 시점에도 요약·통계 API 를 호출하지 않는다', async ({ page }) => {
     const mock = await openRegister(page)
 
-    await fillForm(page, '1반', '홍길동', '302')
+    await fillForm(page, '1', '홍길동', '302')
     await page.getByRole('button', { name: SUBMIT_NAME }).click()
     await expect(page.getByRole('heading', { name: '등록이 완료되었습니다' })).toBeVisible()
 
@@ -226,9 +226,11 @@ test.describe('인원 수·통계 비노출 (회귀 방지)', () => {
         `호출되면 안 되는 API: ${forbidden} (실제 호출: ${mock.handledPaths.join(', ')})`,
       ).toBe(false)
     }
-    // 화면이 실제로 쓰는 엔드포인트는 등록 창과 등록뿐이다.
+    // 화면이 실제로 쓰는 엔드포인트는 등록 창·등록, 그리고 어제 인원 한 줄뿐이다.
+    // `/registrations/yesterday` 는 어제 <b>합계</b>만 주고 이름·반·호수를 담지 않으므로
+    // "오늘 인원 수와 통계를 감춘다"는 이 테스트의 취지와 충돌하지 않는다.
     expect(new Set(mock.handledPaths.map((path) => path.replace('/api/v1', '')))).toEqual(
-      new Set(['/registrations/window', '/registrations']),
+      new Set(['/registrations/window', '/registrations', '/registrations/yesterday']),
     )
   })
 })
@@ -237,13 +239,13 @@ test.describe('R6 이전 입력값 기억', () => {
   test('등록 성공 후 새로고침하면 입력칸이 자동으로 채워진다', async ({ page }) => {
     const mock = await openRegister(page)
 
-    await fillForm(page, '1반', '홍길동', '302')
+    await fillForm(page, '1', '홍길동', '302')
     await page.getByRole('button', { name: SUBMIT_NAME }).click()
 
     await expect(page.getByRole('heading', { name: '등록이 완료되었습니다' })).toBeVisible()
     expect(mock.registrationRequests).toHaveLength(1)
     expect(mock.registrationRequests[0]).toMatchObject({
-      className: '1반',
+      className: '1',
       studentName: '홍길동',
       roomNumber: '302',
       // 취소 비밀번호는 서버로 <b>보내지되</b>, 아래에서 보듯 저장되지는 않는다.
@@ -254,7 +256,7 @@ test.describe('R6 이전 입력값 기억', () => {
     // 비밀번호가 여기 섞이면 공용 기기에서 다음 사람이 남의 등록을 취소할 수 있다.
     const saved = await page.evaluate(() => window.localStorage.getItem('imlate.lastInput'))
     expect(saved && (JSON.parse(saved) as Record<string, string>)).toEqual({
-      className: '1반',
+      className: '1',
       studentName: '홍길동',
       roomNumber: '302',
     })
@@ -263,7 +265,7 @@ test.describe('R6 이전 입력값 기억', () => {
     // 재방문(새로고침) — 자동 채움
     await page.reload()
     await expect(page.getByRole('heading', { level: 1, name: '야간 복귀 등록' })).toBeVisible()
-    await expect(page.getByLabel(LABEL.className)).toHaveValue('1반')
+    await expect(page.getByLabel(LABEL.className)).toHaveValue('1')
     await expect(page.getByLabel(LABEL.studentName)).toHaveValue('홍길동')
     await expect(page.getByLabel(LABEL.roomNumber)).toHaveValue('302')
     await expect(page.getByRole('button', { name: '저장된 정보 지우기' })).toBeVisible()
@@ -275,12 +277,12 @@ test.describe('R6 이전 입력값 기억', () => {
   test('저장된 정보 지우기를 누르면 입력칸이 비워진다', async ({ page }) => {
     await openRegister(page)
 
-    await fillForm(page, '2반', '김철수', '305')
+    await fillForm(page, '2', '김철수', '305')
     await page.getByRole('button', { name: SUBMIT_NAME }).click()
     await expect(page.getByRole('heading', { name: '등록이 완료되었습니다' })).toBeVisible()
 
     await page.reload()
-    await expect(page.getByLabel(LABEL.className)).toHaveValue('2반')
+    await expect(page.getByLabel(LABEL.className)).toHaveValue('2')
 
     await page.getByRole('button', { name: '저장된 정보 지우기' }).click()
     await expect(page.getByLabel(LABEL.className)).toHaveValue('')
@@ -294,13 +296,13 @@ test.describe('R6 이전 입력값 기억', () => {
   test('다른 인원 이어서 등록하기는 반만 남기고 이름·호수를 비운다', async ({ page }) => {
     await openRegister(page)
 
-    await fillForm(page, '3반', '이영희', '301')
+    await fillForm(page, '3', '이영희', '301')
     await page.getByRole('button', { name: SUBMIT_NAME }).click()
     await expect(page.getByRole('heading', { name: '등록이 완료되었습니다' })).toBeVisible()
 
     await page.getByRole('button', { name: '다른 인원 이어서 등록하기' }).click()
 
-    await expect(page.getByLabel(LABEL.className)).toHaveValue('3반')
+    await expect(page.getByLabel(LABEL.className)).toHaveValue('3')
     await expect(page.getByLabel(LABEL.studentName)).toHaveValue('')
     await expect(page.getByLabel(LABEL.roomNumber)).toHaveValue('')
     await expect(page.getByRole('heading', { name: '등록이 완료되었습니다' })).toHaveCount(0)
@@ -311,7 +313,7 @@ test.describe('중복 등록', () => {
   test('이미 등록된 사람이면 "이미 등록" 안내를 보여 준다', async ({ page }) => {
     await openRegister(page, { register: 'duplicate' })
 
-    await fillForm(page, '1반', '홍길동', '302')
+    await fillForm(page, '1', '홍길동', '302')
     await page.getByRole('button', { name: SUBMIT_NAME }).click()
 
     await expect(page.getByRole('heading', { name: '이미 등록되어 있습니다' })).toBeVisible()
@@ -320,7 +322,7 @@ test.describe('중복 등록', () => {
 
     // 결과 카드에 반·이름·호수·복귀시각이 모두 보인다.
     const result = page.getByRole('region', { name: '이미 등록되어 있습니다' })
-    await expect(result).toContainText('1반')
+    await expect(result).toContainText('1')
     await expect(result).toContainText('홍길동')
     await expect(result).toContainText('302')
     await expect(result).toContainText(RETURN_TIME_LABEL)
@@ -350,7 +352,7 @@ test.describe('등록 마감', () => {
   test('서버가 409 REGISTRATION_CLOSED 를 주면 마감 문구를 안내한다', async ({ page }) => {
     await openRegister(page, { register: 'closed' })
 
-    await fillForm(page, '1반', '홍길동', '302')
+    await fillForm(page, '1', '홍길동', '302')
     await page.getByRole('button', { name: SUBMIT_NAME }).click()
 
     await expect(page.getByRole('alert')).toContainText(REGISTRATION_CLOSED_MESSAGE)
@@ -362,7 +364,7 @@ test.describe('과다 요청(429)', () => {
   test('429 응답이면 재시도 안내 문구를 보여 준다', async ({ page }) => {
     await openRegister(page, { register: 'rateLimited' })
 
-    await fillForm(page, '1반', '홍길동', '302')
+    await fillForm(page, '1', '홍길동', '302')
     await page.getByRole('button', { name: SUBMIT_NAME }).click()
 
     const alert = page.getByRole('alert')
@@ -390,17 +392,18 @@ test.describe('입력 검증', () => {
   test('허용되지 않는 문자가 있으면 제출을 막는다', async ({ page }) => {
     const mock = await openRegister(page)
 
-    await fillForm(page, '1반!!', '홍길동', '302')
+    // 반·호수는 입력 단계에서 숫자가 아닌 글자가 걸러지므로, 제출까지 가는 위반은 이름 쪽에서 난다.
+    await fillForm(page, '1', '홍길동!!', '302')
     await page.getByRole('button', { name: SUBMIT_NAME }).click()
 
-    await expect(page.getByText('한글·영문·숫자와 공백, 괄호( ), 하이픈(-)만 사용할 수 있습니다.')).toBeVisible()
+    await expect(page.getByText('이름에는 한글·영문만 사용할 수 있습니다.')).toBeVisible()
     expect(mock.registrationRequests).toHaveLength(0)
   })
 
   test('서버가 알려준 필드 오류를 해당 입력칸에 표시한다', async ({ page }) => {
     await openRegister(page, { register: 'validationError' })
 
-    await fillForm(page, '1반', '홍길동', '302')
+    await fillForm(page, '1', '홍길동', '302')
     await page.getByRole('button', { name: SUBMIT_NAME }).click()
 
     await expect(page.getByText('이름은 20자 이하로 입력해 주세요.')).toBeVisible()

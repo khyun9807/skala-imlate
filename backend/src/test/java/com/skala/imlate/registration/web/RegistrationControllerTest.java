@@ -97,18 +97,18 @@ class RegistrationControllerTest {
     @Test
     @DisplayName("신규 등록은 201 CREATED 와 duplicate=false 를 반환한다")
     void 신규_등록은_201() throws Exception {
-        ReturnRegistration saved = TestFixtures.registration(12L, "1반", "홍길동", "302");
+        ReturnRegistration saved = TestFixtures.registration(12L, "1", "홍길동", "302");
         when(registrationService.register(any(RegistrationCommand.class)))
                 .thenReturn(new RegistrationResult(saved, false));
 
         mockMvc.perform(post(PATH)
                         .contentType(MediaType.APPLICATION_JSON)
                         .characterEncoding(StandardCharsets.UTF_8)
-                        .content(body("1반", "홍길동", "302")))
+                        .content(body("1", "홍길동", "302")))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").value(12))
                 .andExpect(jsonPath("$.registrationDate").value("2026-08-05"))
-                .andExpect(jsonPath("$.className").value("1반"))
+                .andExpect(jsonPath("$.className").value("1"))
                 .andExpect(jsonPath("$.studentName").value("홍길동"))
                 .andExpect(jsonPath("$.roomNumber").value("302"))
                 .andExpect(jsonPath("$.duplicate").value(false))
@@ -118,14 +118,14 @@ class RegistrationControllerTest {
     @Test
     @DisplayName("이미 등록된 경우 200 OK 와 duplicate=true 를 반환한다")
     void 중복_등록은_200() throws Exception {
-        ReturnRegistration saved = TestFixtures.registration(12L, "1반", "홍길동", "302");
+        ReturnRegistration saved = TestFixtures.registration(12L, "1", "홍길동", "302");
         when(registrationService.register(any(RegistrationCommand.class)))
                 .thenReturn(new RegistrationResult(saved, true));
 
         mockMvc.perform(post(PATH)
                         .contentType(MediaType.APPLICATION_JSON)
                         .characterEncoding(StandardCharsets.UTF_8)
-                        .content(body("1반", "홍길동", "302")))
+                        .content(body("1", "홍길동", "302")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.duplicate").value(true))
                 .andExpect(jsonPath("$.id").value(12));
@@ -140,7 +140,7 @@ class RegistrationControllerTest {
         mockMvc.perform(post(PATH)
                         .contentType(MediaType.APPLICATION_JSON)
                         .characterEncoding(StandardCharsets.UTF_8)
-                        .content(body("1반", "홍길동", "302")))
+                        .content(body("1", "홍길동", "302")))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("REGISTRATION_CLOSED"))
                 .andExpect(jsonPath("$.message").value("등록 마감 시간(22:00)이 지났습니다."))
@@ -167,7 +167,7 @@ class RegistrationControllerTest {
         mockMvc.perform(post(PATH)
                         .contentType(MediaType.APPLICATION_JSON)
                         .characterEncoding(StandardCharsets.UTF_8)
-                        .content(body("1반", "<script>", "302")))
+                        .content(body("1", "<script>", "302")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
 
@@ -180,7 +180,7 @@ class RegistrationControllerTest {
         mockMvc.perform(post(PATH)
                         .contentType(MediaType.APPLICATION_JSON)
                         .characterEncoding(StandardCharsets.UTF_8)
-                        .content(body("1반", "가".repeat(21), "302")))
+                        .content(body("1", "가".repeat(21), "302")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
     }
@@ -192,7 +192,7 @@ class RegistrationControllerTest {
             mockMvc.perform(post(PATH)
                             .contentType(MediaType.APPLICATION_JSON)
                             .characterEncoding(StandardCharsets.UTF_8)
-                            .content(body("1반", "홍길동", "302", bad)))
+                            .content(body("1", "홍길동", "302", bad)))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
         }
@@ -209,7 +209,7 @@ class RegistrationControllerTest {
         mockMvc.perform(post(PATH + "/cancel")
                         .contentType(MediaType.APPLICATION_JSON)
                         .characterEncoding(StandardCharsets.UTF_8)
-                        .content(cancelBody("1반", "홍길동", "302", "1234")))
+                        .content(cancelBody("1", "홍길동", "302", "1234")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.alreadyCancelled").value(false))
                 .andExpect(jsonPath("$.message").exists())
@@ -227,7 +227,7 @@ class RegistrationControllerTest {
         mockMvc.perform(post(PATH + "/cancel")
                         .contentType(MediaType.APPLICATION_JSON)
                         .characterEncoding(StandardCharsets.UTF_8)
-                        .content(cancelBody("1반", "홍길동", "302", "9999")))
+                        .content(cancelBody("1", "홍길동", "302", "9999")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("CANCEL_REJECTED"));
     }
@@ -241,7 +241,7 @@ class RegistrationControllerTest {
         mockMvc.perform(post(PATH + "/cancel")
                         .contentType(MediaType.APPLICATION_JSON)
                         .characterEncoding(StandardCharsets.UTF_8)
-                        .content(cancelBody("1반", "홍길동", "302", "9999")))
+                        .content(cancelBody("1", "홍길동", "302", "9999")))
                 .andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.code").value("CANCEL_LOCKED"));
     }
@@ -252,11 +252,51 @@ class RegistrationControllerTest {
         mockMvc.perform(post(PATH + "/cancel")
                         .contentType(MediaType.APPLICATION_JSON)
                         .characterEncoding(StandardCharsets.UTF_8)
-                        .content(cancelBody("1반", "홍길동", "302", "12")))
+                        .content(cancelBody("1", "홍길동", "302", "12")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
 
         verify(registrationService, never()).cancel(any(CancelCommand.class));
+    }
+
+    @Test
+    @DisplayName("앞뒤 공백이 붙어도 400 으로 자르지 않는다 — 정규화는 서비스가 한다")
+    void 앞뒤_공백은_400이_아니다() throws Exception {
+        when(registrationService.register(any(RegistrationCommand.class)))
+                .thenReturn(new RegistrationResult(TestFixtures.registration(1L, "1", "홍길동", "302"), false));
+
+        mockMvc.perform(post(PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .characterEncoding(StandardCharsets.UTF_8)
+                        .content(body("  1  ", "  홍  길동  ", "  302  ")))
+                .andExpect(status().isCreated());
+
+        // DTO 가 공백까지 막아 버리면 "앞뒤 공백은 알아서 정리된다"는 기존 동작이 조용히 사라진다.
+        verify(registrationService).register(any(RegistrationCommand.class));
+    }
+
+    @Test
+    @DisplayName("GET /yesterday 는 어제 인원 수를 반환한다 (이름 등 PII 는 담지 않는다)")
+    void 어제_인원수를_반환한다() throws Exception {
+        when(registrationService.countByDate(TestFixtures.DATE.minusDays(1))).thenReturn(23L);
+
+        mockMvc.perform(get(PATH + "/yesterday"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.date").value(TestFixtures.DATE.minusDays(1).toString()))
+                .andExpect(jsonPath("$.count").value(23))
+                // 인원 수 말고는 아무것도 새어 나가면 안 된다.
+                .andExpect(jsonPath("$.items").doesNotExist())
+                .andExpect(jsonPath("$.studentName").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("어제 아무도 없었으면 count=0 을 그대로 준다 (표시 여부는 화면이 정한다)")
+    void 어제_0명이면_0을_준다() throws Exception {
+        when(registrationService.countByDate(TestFixtures.DATE.minusDays(1))).thenReturn(0L);
+
+        mockMvc.perform(get(PATH + "/yesterday"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.count").value(0));
     }
 
     @Test

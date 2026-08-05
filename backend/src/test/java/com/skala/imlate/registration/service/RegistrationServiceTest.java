@@ -84,7 +84,7 @@ class RegistrationServiceTest {
     }
 
     private static RegistrationCommand command() {
-        return new RegistrationCommand("1반", "홍길동", "302", TestFixtures.CANCEL_PASSWORD, "1.2.3.4");
+        return new RegistrationCommand("1", "홍길동", "302", TestFixtures.CANCEL_PASSWORD, "1.2.3.4");
     }
 
     @Test
@@ -95,7 +95,7 @@ class RegistrationServiceTest {
         RegistrationResult result = service.register(command());
 
         assertThat(result.duplicate()).isFalse();
-        assertThat(result.registration().getClassName()).isEqualTo("1반");
+        assertThat(result.registration().getClassName()).isEqualTo("1");
         assertThat(result.registration().getStudentName()).isEqualTo("홍길동");
         assertThat(result.registration().getRoomNumber()).isEqualTo("302");
         assertThat(result.registration().getRegistrationDate()).isEqualTo(TestFixtures.DATE);
@@ -105,7 +105,7 @@ class RegistrationServiceTest {
         InOrder order = inOrder(walRepository, registrationRepository, registrationWriter);
         order.verify(walRepository).append(walCaptor.capture());
         order.verify(registrationRepository).findByRegistrationDateAndClassNameAndStudentNameAndRoomNumber(
-                eq(TestFixtures.DATE), eq("1반"), eq("홍길동"), eq("302"));
+                eq(TestFixtures.DATE), eq("1"), eq("홍길동"), eq("302"));
         order.verify(registrationWriter).insert(any(ReturnRegistration.class));
         order.verify(walRepository).updateStatus(anyString(), eq(TestFixtures.DATE), eq(WalStatus.COMMITTED));
         order.verifyNoMoreInteractions();
@@ -123,7 +123,7 @@ class RegistrationServiceTest {
     @Test
     @DisplayName("이미 등록된 사람이면 DB 저장 없이 duplicate=true 를 돌려주고 WAL 은 COMMITTED 로 정리한다")
     void 중복_등록은_기존_레코드를_그대로_돌려준다() {
-        ReturnRegistration already = TestFixtures.registration(7L, "1반", "홍길동", "302");
+        ReturnRegistration already = TestFixtures.registration(7L, "1", "홍길동", "302");
         existing(Optional.of(already));
 
         RegistrationResult result = service.register(command());
@@ -180,7 +180,7 @@ class RegistrationServiceTest {
     @Test
     @DisplayName("동시 요청으로 유니크 충돌이 나면 재조회해 duplicate=true 로 멱등 응답한다")
     void 유니크_충돌은_멱등_응답으로_처리된다() {
-        ReturnRegistration raced = TestFixtures.registration(9L, "1반", "홍길동", "302");
+        ReturnRegistration raced = TestFixtures.registration(9L, "1", "홍길동", "302");
         when(registrationRepository.findByRegistrationDateAndClassNameAndStudentNameAndRoomNumber(
                 any(), anyString(), anyString(), anyString()))
                 .thenReturn(Optional.empty())
@@ -228,9 +228,9 @@ class RegistrationServiceTest {
         existing(Optional.empty());
 
         RegistrationResult result =
-                service.register(new RegistrationCommand("  1반 ", "홍  길동", " 302  ", TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
+                service.register(new RegistrationCommand("  1 ", "홍  길동", " 302  ", TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
 
-        assertThat(result.registration().getClassName()).isEqualTo("1반");
+        assertThat(result.registration().getClassName()).isEqualTo("1");
         assertThat(result.registration().getStudentName()).isEqualTo("홍 길동");
         assertThat(result.registration().getRoomNumber()).isEqualTo("302");
 
@@ -243,9 +243,9 @@ class RegistrationServiceTest {
     @DisplayName("허용되지 않은 문자·빈 값·길이 초과는 VALIDATION_FAILED 로 거부하고 WAL 도 남기지 않는다")
     void 잘못된_입력은_검증에서_거부된다() {
         assertValidationFailure(new RegistrationCommand("<script>", "홍길동", "302", TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
-        assertValidationFailure(new RegistrationCommand("1반", "  ", "302", TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
-        assertValidationFailure(new RegistrationCommand("1반", "홍길동", null, TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
-        assertValidationFailure(new RegistrationCommand("1반", "가".repeat(21), "302", TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
+        assertValidationFailure(new RegistrationCommand("1", "  ", "302", TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
+        assertValidationFailure(new RegistrationCommand("1", "홍길동", null, TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
+        assertValidationFailure(new RegistrationCommand("1", "가".repeat(21), "302", TestFixtures.CANCEL_PASSWORD, "1.2.3.4"));
 
         verifyNoInteractions(walRepository);
         verify(registrationWriter, never()).insert(any(ReturnRegistration.class));
@@ -264,7 +264,7 @@ class RegistrationServiceTest {
     void 클라이언트_IP_가_없으면_unknown_으로_기록한다() {
         existing(Optional.empty());
 
-        service.register(new RegistrationCommand("1반", "홍길동", "302", TestFixtures.CANCEL_PASSWORD, "  "));
+        service.register(new RegistrationCommand("1", "홍길동", "302", TestFixtures.CANCEL_PASSWORD, "  "));
 
         ArgumentCaptor<WalEntry> walCaptor = ArgumentCaptor.forClass(WalEntry.class);
         verify(walRepository).append(walCaptor.capture());
@@ -276,7 +276,7 @@ class RegistrationServiceTest {
     void 정규화_유틸() {
         assertThat(RegistrationService.normalize(null)).isEmpty();
         assertThat(RegistrationService.normalize("  A  B  ")).isEqualTo("A B");
-        assertThat(RegistrationService.normalize("1반")).isEqualTo("1반");
+        assertThat(RegistrationService.normalize("1")).isEqualTo("1");
         assertThat(RegistrationService.normalize("A\t\tB")).isEqualTo("A B");
     }
 

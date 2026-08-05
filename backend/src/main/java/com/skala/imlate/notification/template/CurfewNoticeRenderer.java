@@ -119,7 +119,7 @@ public class CurfewNoticeRenderer {
             sb.append("· 등록된 인원이 없습니다.\n");
         } else if (withNames) {
             for (Map.Entry<String, List<NoticePayload.Row>> entry : grouped.entrySet()) {
-                sb.append("· ").append(entry.getKey())
+                sb.append("· ").append(classLabel(entry.getKey()))
                         .append(" (").append(entry.getValue().size()).append("명)\n  ");
                 List<String> names = new ArrayList<>(entry.getValue().size());
                 for (NoticePayload.Row row : entry.getValue()) {
@@ -130,7 +130,7 @@ public class CurfewNoticeRenderer {
         } else {
             List<String> summary = new ArrayList<>(grouped.size());
             for (Map.Entry<String, List<NoticePayload.Row>> entry : grouped.entrySet()) {
-                summary.add(entry.getKey() + " " + entry.getValue().size() + "명");
+                summary.add(classLabel(entry.getKey()) + " " + entry.getValue().size() + "명");
             }
             sb.append("· ").append(String.join(" / ", summary)).append('\n');
             sb.append("  (명단이 길어 이름/호수는 아래 링크에서 확인해 주세요)\n");
@@ -186,7 +186,7 @@ public class CurfewNoticeRenderer {
         } else {
             List<String> summary = new ArrayList<>(grouped.size());
             for (Map.Entry<String, List<NoticePayload.Row>> entry : grouped.entrySet()) {
-                summary.add(entry.getKey() + " " + entry.getValue().size() + "명");
+                summary.add(classLabel(entry.getKey()) + " " + entry.getValue().size() + "명");
             }
             sb.append(' ').append(String.join(" / ", summary)).append('\n');
         }
@@ -281,7 +281,7 @@ public class CurfewNoticeRenderer {
                     .append("<strong>반별 인원</strong><br>");
             List<String> summary = new ArrayList<>(grouped.size());
             for (Map.Entry<String, List<NoticePayload.Row>> entry : grouped.entrySet()) {
-                summary.add(escape(entry.getKey()) + " " + entry.getValue().size() + "명");
+                summary.add(escape(classLabel(entry.getKey())) + " " + entry.getValue().size() + "명");
             }
             sb.append(String.join(" · ", summary)).append("</div>\n");
         }
@@ -323,6 +323,28 @@ public class CurfewNoticeRenderer {
     // ------------------------------------------------------------------
     // 내부 헬퍼
     // ------------------------------------------------------------------
+
+    /**
+     * 반 번호에 "반" 라벨을 붙인다. 표 밖에서 반 값만 홀로 찍히는 자리에 쓴다.
+     *
+     * <p><b>왜 필요한가</b> — 반은 이제 숫자만 저장하므로 그대로 찍으면 문자에
+     * {@code "· 1 (5명)"} 처럼 나와 그 숫자가 반인지 인원인지 알 수 없다.
+     * 표 안(고정폭 표·HTML 표)은 "반" 열 머리글이 있으니 라벨을 붙이지 않는다.
+     *
+     * <p>이 규칙이 적용되기 전에 저장된 {@code "1반"} 같은 값이 섞여 있어도
+     * {@code "1반반"} 이 되지 않도록, 숫자로만 이루어진 값에만 라벨을 붙인다.
+     */
+    private static String classLabel(String className) {
+        if (className == null || className.isEmpty()) {
+            return "";
+        }
+        for (int i = 0; i < className.length(); i++) {
+            if (className.charAt(i) < '0' || className.charAt(i) > '9') {
+                return className;
+            }
+        }
+        return className + "반";
+    }
 
     /** 반 기준 그룹핑. 입력 순서(반 오름차순 → 이름 오름차순)를 그대로 유지한다. */
     private static Map<String, List<NoticePayload.Row>> groupByClass(List<NoticePayload.Row> rows) {

@@ -21,20 +21,18 @@ public record CancelRequest(
 
         @NotBlank(message = "반을 입력해 주세요.")
         @Size(max = 20, message = "반은 20자 이내로 입력해 주세요.")
-        @Pattern(regexp = "^[가-힣A-Za-z0-9 ()\\-]{1,20}$",
-                message = "반에는 한글·영문·숫자와 공백, 괄호, 하이픈만 사용할 수 있습니다.")
+        @Pattern(regexp = "^\\s*[0-9]{1,20}\\s*$", message = "반은 숫자만 입력해 주세요.")
         String className,
 
         @NotBlank(message = "이름을 입력해 주세요.")
         @Size(max = 20, message = "이름은 20자 이내로 입력해 주세요.")
-        @Pattern(regexp = "^[가-힣A-Za-z0-9 ()\\-]{1,20}$",
-                message = "이름에는 한글·영문·숫자와 공백, 괄호, 하이픈만 사용할 수 있습니다.")
+        @Pattern(regexp = "^\\s*[가-힣A-Za-z]+(\\s+[가-힣A-Za-z]+)*\\s*$",
+                message = "이름에는 한글·영문만 사용할 수 있습니다.")
         String studentName,
 
         @NotBlank(message = "기숙사 호수를 입력해 주세요.")
         @Size(max = 20, message = "기숙사 호수는 20자 이내로 입력해 주세요.")
-        @Pattern(regexp = "^[가-힣A-Za-z0-9 ()\\-]{1,20}$",
-                message = "기숙사 호수에는 한글·영문·숫자와 공백, 괄호, 하이픈만 사용할 수 있습니다.")
+        @Pattern(regexp = "^\\s*[0-9]{1,20}\\s*$", message = "기숙사 호수는 숫자만 입력해 주세요.")
         String roomNumber,
 
         @NotBlank(message = "비밀번호를 입력해 주세요.")

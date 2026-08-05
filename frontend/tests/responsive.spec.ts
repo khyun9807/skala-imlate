@@ -250,7 +250,7 @@ test.describe('상태 화면 반응형', () => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height })
       await openRegisterPage(page, { register: 'rateLimited' })
 
-      await page.getByLabel('반').fill('1반')
+      await page.getByLabel('반').fill('1')
       await page.getByLabel('이름').fill('홍길동')
       await page.getByLabel('기숙사 호수').fill('302')
       await page.getByLabel('취소 비밀번호').fill('1234')

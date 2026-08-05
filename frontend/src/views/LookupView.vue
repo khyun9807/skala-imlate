@@ -89,6 +89,19 @@ async function load(): Promise<void> {
   }
 }
 
+/**
+ * 반 번호에 "반" 라벨을 붙인다.
+ *
+ * 반은 이제 숫자만 저장되므로 그대로 찍으면 칩이 "1 5명" 처럼 보여
+ * 앞의 숫자가 반인지 인원인지 알 수 없다. 표 안(반 열 머리글이 있는 곳)에는 붙이지 않는다.
+ *
+ * 규칙이 바뀌기 전에 저장된 "1반" 같은 값이 "1반반" 이 되지 않도록,
+ * 숫자로만 이루어진 값에만 붙인다. (서버 CurfewNoticeRenderer.classLabel 과 같은 규칙)
+ */
+function classLabel(className: string): string {
+  return /^[0-9]+$/.test(className) ? `${className}반` : className
+}
+
 function toggleClass(className: string): void {
   selectedClass.value = selectedClass.value === className ? '' : className
 }
@@ -166,7 +179,7 @@ function printPage(): void {
               :aria-pressed="selectedClass === entry.className"
               @click="toggleClass(entry.className)"
             >
-              {{ entry.className }}
+              {{ classLabel(entry.className) }}
               <span class="chip__count tabular">{{ entry.count }}명</span>
             </button>
           </div>

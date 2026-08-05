@@ -89,7 +89,7 @@ sequenceDiagram
     I->>I: GLOBAL 버킷 소비 → REGISTER 버킷 소비
     I-->>U: 초과 시 429 + Retry-After (여기서 종료)
     I->>C: 통과
-    C->>C: @Valid (정규식 ^[가-힣A-Za-z0-9 ()\-]{1,20}$)
+    C->>C: @Valid (반·호수 숫자만 / 이름 글자만)
     C->>S: register(RegistrationCommand + clientIp)
     S->>S: windowPolicy.requireOpen() — 22:00 이후면 409
     S->>S: 정규화(trim, 연속 공백 1칸) 후 재검증

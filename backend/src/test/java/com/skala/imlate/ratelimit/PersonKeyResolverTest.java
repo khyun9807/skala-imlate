@@ -18,7 +18,7 @@ import jakarta.servlet.http.HttpServletRequest;
  * {@link PersonKeyResolver} 단위 테스트.
  *
  * <p>개인 버킷의 키가 여기서 나온다. 정규화 규칙이 {@code RegistrationService} 와 어긋나면
- * {@code "1반"} 과 {@code " 1반 "} 이 다른 사람이 되어 제한을 우회할 수 있으므로 그 부분을 집중해서 본다.
+ * {@code "1"} 과 {@code " 1반 "} 이 다른 사람이 되어 제한을 우회할 수 있으므로 그 부분을 집중해서 본다.
  */
 @DisplayName("개인 키 추출(PersonKeyResolver)")
 class PersonKeyResolverTest {

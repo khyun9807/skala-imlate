@@ -93,8 +93,9 @@ test.describe('명단 표시 (데스크톱)', () => {
     await openLookup(page)
 
     await expect(page.getByRole('heading', { name: '반별 인원' })).toBeVisible()
+    // 반은 숫자만 저장되므로 칩에는 "반" 라벨을 붙여 보여 준다("1 5명" 이면 무엇이 반인지 모른다).
     for (const entry of TEST_BY_CLASS) {
-      await expect(page.getByRole('button', { name: `${entry.className} ${entry.count}명` })).toBeVisible()
+      await expect(page.getByRole('button', { name: `${entry.className}반 ${entry.count}명` })).toBeVisible()
     }
 
     // 호수별 인원은 접혀 있다가 펼치면 보인다.
@@ -239,8 +240,10 @@ test.describe('모바일 카드 레이아웃', () => {
   test('모바일에서도 검색 필터가 카드에 적용된다', async ({ page }) => {
     await openLookup(page)
 
-    await searchBox(page).fill('3반')
-    await expect(cards(page)).toHaveCount(3)
+    // 반이 숫자가 된 뒤로는 "3" 같은 한 글자가 호수(302, 301 …)에도 걸려 검색어로 쓸 수 없다.
+    // 이 테스트가 보려는 것은 "검색이 카드에도 적용되는가"이므로 이름으로 좁힌다.
+    await searchBox(page).fill('오세훈')
+    await expect(cards(page)).toHaveCount(1)
     await expect(cards(page).first()).toContainText('오세훈')
   })
 })

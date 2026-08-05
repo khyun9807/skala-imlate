@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
+
 import com.skala.imlate.common.web.ClientIpResolver;
 import com.skala.imlate.registration.service.CancelCommand;
 import com.skala.imlate.registration.service.CancelResult;
@@ -23,6 +25,7 @@ import com.skala.imlate.registration.web.dto.CancelResponse;
 import com.skala.imlate.registration.web.dto.RegistrationRequest;
 import com.skala.imlate.registration.web.dto.RegistrationResponse;
 import com.skala.imlate.registration.web.dto.RegistrationSummaryResponse;
+import com.skala.imlate.registration.web.dto.YesterdayResponse;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -116,5 +119,22 @@ public class RegistrationController {
     @GetMapping("/summary")
     public RegistrationSummaryResponse summary() {
         return new RegistrationSummaryResponse(windowPolicy.targetDate(), windowPolicy.isOpen());
+    }
+
+    /**
+     * 어제 연장 복귀 인원 수(공개, PII 없음).
+     *
+     * <p>등록 화면 하단 안내 문구("어제 N명이 …")에 쓴다. 취소분은 빠진 최종 인원이다.
+     *
+     * <p><b>"어제"는 오늘 대상일에서 하루를 뺀 날이다.</b> 등록 창이 자정에 열리므로
+     * 00:10 에 접속하면 대상일은 이미 오늘이고, 어제는 방금 23:30 에 문이 열렸던 그날이 된다 —
+     * 화면이 말하려는 "어제"와 정확히 일치한다.
+     *
+     * @return 어제 날짜와 인원 수
+     */
+    @GetMapping("/yesterday")
+    public YesterdayResponse yesterday() {
+        LocalDate target = windowPolicy.targetDate().minusDays(1);
+        return new YesterdayResponse(target, registrationService.countByDate(target));
     }
 }

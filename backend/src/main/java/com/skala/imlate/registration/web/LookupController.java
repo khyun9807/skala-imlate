@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.skala.imlate.common.error.ApiException;
 import com.skala.imlate.common.error.ErrorCode;
 import com.skala.imlate.common.security.AccessTokenService;
+import com.skala.imlate.common.util.NumericTextOrder;
 import com.skala.imlate.registration.domain.ReturnRegistration;
 import com.skala.imlate.registration.service.ReconciliationReport;
 import com.skala.imlate.registration.service.ReconciliationService;
@@ -44,23 +45,13 @@ public class LookupController {
 
     private static final Logger log = LoggerFactory.getLogger(LookupController.class);
 
-    /** 호수는 숫자면 숫자 크기 순, 아니면 문자열 순으로 정렬한다(예: 302 < 1002). */
-    private static final Comparator<String> ROOM_ORDER = (left, right) -> {
-        Integer a = toIntOrNull(left);
-        Integer b = toIntOrNull(right);
-        if (a != null && b != null) {
-            int numeric = Integer.compare(a, b);
-            // 숫자가 같아도 문자열이 다르면("302" vs "0302") 서로 다른 키로 유지한다(TreeMap 키 충돌 방지).
-            return numeric != 0 ? numeric : left.compareTo(right);
-        }
-        if (a != null) {
-            return -1;
-        }
-        if (b != null) {
-            return 1;
-        }
-        return left.compareTo(right);
-    };
+    /**
+     * 반·호수 모두 숫자면 숫자 크기 순, 아니면 문자열 순으로 정렬한다(예: 302 < 1002).
+     *
+     * <p>반이 숫자가 된 뒤로는 <b>반에도 같은 비교자가 필요하다</b> — 사전순으로 두면
+     * 1반 → 10반 → 11반 → 2반 순이 되어, 반이 10개가 되는 순간 사감 화면이 조용히 뒤죽박죽이 된다.
+     */
+    private static final Comparator<String> NUMERIC_FIRST = NumericTextOrder.INSTANCE;
 
     private final RegistrationService registrationService;
     private final ReconciliationService reconciliationService;
@@ -115,8 +106,8 @@ public class LookupController {
         List<ReturnRegistration> rows = registrationService.findByDate(target);
 
         List<LookupResponse.Item> items = new ArrayList<>(rows.size());
-        Map<String, Long> classCounts = new TreeMap<>();
-        Map<String, Long> roomCounts = new TreeMap<>(ROOM_ORDER);
+        Map<String, Long> classCounts = new TreeMap<>(NUMERIC_FIRST);
+        Map<String, Long> roomCounts = new TreeMap<>(NUMERIC_FIRST);
         int no = 1;
         for (ReturnRegistration row : rows) {
             // no 는 반 → 이름 정렬 순서 기준으로 1부터 부여한다.
@@ -155,20 +146,4 @@ public class LookupController {
         }
     }
 
-    private static Integer toIntOrNull(String value) {
-        if (value == null || value.isEmpty()) {
-            return null;
-        }
-        for (int i = 0; i < value.length(); i++) {
-            if (!Character.isDigit(value.charAt(i))) {
-                return null;
-            }
-        }
-        try {
-            return Integer.valueOf(value);
-        } catch (NumberFormatException ex) {
-            // 자릿수가 int 범위를 넘는 경우 — 문자열 순으로 처리한다.
-            return null;
-        }
-    }
 }

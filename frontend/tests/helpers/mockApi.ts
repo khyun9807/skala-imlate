@@ -106,6 +106,13 @@ export interface MockOptions {
   lookup?: LookupScenario
   /** 취소 응답 (기본 cancelled) */
   cancel?: CancelScenario
+  /**
+   * 어제 연장 복귀 인원 수 (기본 12).
+   *
+   * `0` 이면 화면이 안내 문구를 감춰야 하고, `null` 이면 API 가 500 을 준다
+   * (그때도 등록 자체는 멀쩡해야 한다).
+   */
+  yesterdayCount?: number | null
   /** 명단 데이터 종류. `long` 은 모든 값이 최대 길이(20자)인 최악 케이스 */
   roster?: 'default' | 'long'
 }
@@ -156,18 +163,18 @@ export interface RosterEntry {
 
 /** 12명 고정 명단 (1반 5명 / 2반 4명 / 3반 3명) */
 export const TEST_ROSTER: RosterEntry[] = [
-  { no: 1, className: '1반', studentName: '홍길동', roomNumber: '302', registeredAt: `${TEST_DATE}T19:41:07` },
-  { no: 2, className: '1반', studentName: '김철수', roomNumber: '305', registeredAt: `${TEST_DATE}T19:52:18` },
-  { no: 3, className: '1반', studentName: '박민수', roomNumber: '302', registeredAt: `${TEST_DATE}T20:03:44` },
-  { no: 4, className: '1반', studentName: '이영희', roomNumber: '301', registeredAt: `${TEST_DATE}T20:11:02` },
-  { no: 5, className: '1반', studentName: '최지우', roomNumber: '307', registeredAt: `${TEST_DATE}T20:19:35` },
-  { no: 6, className: '2반', studentName: '강현우', roomNumber: '401', registeredAt: `${TEST_DATE}T20:24:51` },
-  { no: 7, className: '2반', studentName: '윤서연', roomNumber: '401', registeredAt: `${TEST_DATE}T20:33:12` },
-  { no: 8, className: '2반', studentName: '임도현', roomNumber: '404', registeredAt: `${TEST_DATE}T20:41:29` },
-  { no: 9, className: '2반', studentName: '정다은', roomNumber: '409', registeredAt: `${TEST_DATE}T20:47:03` },
-  { no: 10, className: '3반', studentName: '오세훈', roomNumber: '502', registeredAt: `${TEST_DATE}T20:52:40` },
-  { no: 11, className: '3반', studentName: '한지민', roomNumber: '506', registeredAt: `${TEST_DATE}T20:55:16` },
-  { no: 12, className: '3반', studentName: '서준호', roomNumber: '503', registeredAt: `${TEST_DATE}T20:58:59` },
+  { no: 1, className: '1', studentName: '홍길동', roomNumber: '302', registeredAt: `${TEST_DATE}T19:41:07` },
+  { no: 2, className: '1', studentName: '김철수', roomNumber: '305', registeredAt: `${TEST_DATE}T19:52:18` },
+  { no: 3, className: '1', studentName: '박민수', roomNumber: '302', registeredAt: `${TEST_DATE}T20:03:44` },
+  { no: 4, className: '1', studentName: '이영희', roomNumber: '301', registeredAt: `${TEST_DATE}T20:11:02` },
+  { no: 5, className: '1', studentName: '최지우', roomNumber: '307', registeredAt: `${TEST_DATE}T20:19:35` },
+  { no: 6, className: '2', studentName: '강현우', roomNumber: '401', registeredAt: `${TEST_DATE}T20:24:51` },
+  { no: 7, className: '2', studentName: '윤서연', roomNumber: '401', registeredAt: `${TEST_DATE}T20:33:12` },
+  { no: 8, className: '2', studentName: '임도현', roomNumber: '404', registeredAt: `${TEST_DATE}T20:41:29` },
+  { no: 9, className: '2', studentName: '정다은', roomNumber: '409', registeredAt: `${TEST_DATE}T20:47:03` },
+  { no: 10, className: '3', studentName: '오세훈', roomNumber: '502', registeredAt: `${TEST_DATE}T20:52:40` },
+  { no: 11, className: '3', studentName: '한지민', roomNumber: '506', registeredAt: `${TEST_DATE}T20:55:16` },
+  { no: 12, className: '3', studentName: '서준호', roomNumber: '503', registeredAt: `${TEST_DATE}T20:58:59` },
 ]
 
 /** 서버 검증 규칙상 각 필드의 최대 길이 (SPEC §5.5) */
@@ -179,9 +186,14 @@ export const MAX_FIELD_LENGTH = 20
  */
 export const LONG_ROSTER: RosterEntry[] = TEST_ROSTER.map((entry) => ({
   ...entry,
-  className: padToMax(`${entry.className} 스칼라`),
+  // 입력 규칙이 "반·호수는 숫자만, 이름은 글자만" 으로 바뀌었으므로 최악 케이스도 그에 맞춘다.
+  // 예전에는 반/호수도 한글을 섞어 만들었는데, 이제 그런 값은 <b>입력 자체가 불가능</b>해서
+  // 화면 테스트가 실제로 일어날 수 없는 상황을 재는 셈이 된다.
+  //
+  // 새 규칙에서의 최악 폭은 "숫자 20자(반각) + 한글 20자(전각)" 조합이다.
+  className: '9'.repeat(20),
   studentName: padToMax(`${entry.studentName} 가나다`),
-  roomNumber: padToMax(`${entry.roomNumber}동 1204호`),
+  roomNumber: '8'.repeat(20),
 }))
 
 /** 반별 인원 요약 (기본 명단에서 자동 계산) */
@@ -192,6 +204,22 @@ export const TEST_BY_ROOM = summarizeByRoom(TEST_ROSTER)
 
 /** 429 응답이 알려주는 재시도 대기 초 */
 export const RETRY_AFTER_SECONDS = 30
+
+/** 어제 날짜 (`TEST_DATE` 하루 전) */
+export const YESTERDAY = '2026-08-04'
+
+/** 기본 어제 연장 복귀 인원 수 */
+export const YESTERDAY_COUNT = 12
+
+/** 어제 인원 안내 문구 6종. `{n}` 자리에 인원 수가 들어간다. */
+export const YESTERDAY_TEMPLATES: readonly string[] = [
+  '어제 {n}명이 사감님의 호날두 수면법을 도왔습니다.',
+  '어제 {n}명이 강의실에 한동안 묶여 있었습니다. 자발적으로요.',
+  '어제 {n}명이 강의실과 조금 긴 시간을 함께했습니다.',
+  '어제 {n}명이 강의실과 긴 시간을 보낸 뒤 23시 30분에 작별했습니다.',
+  '어제 {n}명이 강의실과 자정 직전까지 동행했습니다.',
+  '어제 {n}명이 강의실과 조금 긴 하루를 보내고 23시 30분에 헤어졌습니다.',
+]
 
 /**
  * `/api/v1/**` 전체를 가로채고 브라우저 시각을 고정한다.
@@ -206,6 +234,8 @@ export async function installApiMocks(page: Page, options: MockOptions = {}): Pr
   let windowScenario: WindowScenario = options.window ?? 'open'
   let registerScenario: RegisterScenario = options.register ?? 'created'
   let cancelScenario: CancelScenario = options.cancel ?? 'cancelled'
+  const yesterdayCount: number | null =
+    options.yesterdayCount === undefined ? YESTERDAY_COUNT : options.yesterdayCount
   const lookupScenario: LookupScenario = options.lookup ?? 'ok'
   const roster = options.roster === 'long' ? LONG_ROSTER : TEST_ROSTER
 
@@ -222,6 +252,17 @@ export async function installApiMocks(page: Page, options: MockOptions = {}): Pr
     // --- 등록 창 -------------------------------------------------------
     if (path.endsWith('/registrations/window')) {
       await json(route, 200, windowPayload(windowScenario))
+      return
+    }
+
+    // --- 어제 연장 복귀 인원 (등록 화면 하단 한 줄) ------------------------
+    if (path.endsWith('/registrations/yesterday')) {
+      if (yesterdayCount === null) {
+        // 서버 오류 시나리오 — 화면은 문구를 감추기만 하고 등록은 계속 되어야 한다.
+        await json(route, 500, errorBody('INTERNAL_ERROR', '일시적인 오류입니다.', path))
+        return
+      }
+      await json(route, 200, { date: YESTERDAY, count: yesterdayCount })
       return
     }
 

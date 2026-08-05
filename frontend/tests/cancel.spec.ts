@@ -40,7 +40,7 @@ async function openCancel(page: Page, options: MockOptions = {}): Promise<ApiMoc
 }
 
 async function fillCancelForm(page: Page, password = '1234'): Promise<void> {
-  await page.getByLabel(LABEL.className).fill('1반')
+  await page.getByLabel(LABEL.className).fill('1')
   await page.getByLabel(LABEL.studentName).fill('홍길동')
   await page.getByLabel(LABEL.roomNumber).fill('302')
   await page.getByLabel(LABEL.password).fill(password)
@@ -62,7 +62,7 @@ test.describe('등록 취소 기본 흐름', () => {
     await expect(page.getByText('취소되었습니다', { exact: false }).first()).toBeVisible()
     expect(mock.cancelRequests).toHaveLength(1)
     expect(mock.cancelRequests[0]).toMatchObject({
-      className: '1반',
+      className: '1',
       studentName: '홍길동',
       roomNumber: '302',
       password: '1234',
@@ -84,7 +84,7 @@ test.describe('등록 취소 기본 흐름', () => {
 
   test('빈 칸이 있으면 요청을 보내지 않고 오류를 표시한다', async ({ page }) => {
     const mock = await openCancel(page)
-    await page.getByLabel(LABEL.className).fill('1반')
+    await page.getByLabel(LABEL.className).fill('1')
     await page.getByLabel(LABEL.studentName).fill('홍길동')
     await page.getByLabel(LABEL.roomNumber).fill('302')
     // 비밀번호를 비워 둔다.
@@ -137,7 +137,7 @@ test.describe('취소 실패 처리', () => {
     await page.getByRole('button', { name: CONFIRM_BUTTON }).click()
     await expect(page.getByRole('alert').filter({ hasText: CANCEL_REJECTED_MESSAGE })).toBeVisible()
 
-    await expect(page.getByLabel(LABEL.className)).toHaveValue('1반')
+    await expect(page.getByLabel(LABEL.className)).toHaveValue('1')
     await expect(page.getByLabel(LABEL.studentName)).toHaveValue('홍길동')
     await expect(page.getByLabel(LABEL.roomNumber)).toHaveValue('302')
     await expect(page.getByLabel(LABEL.password)).toHaveValue('')
@@ -199,7 +199,7 @@ test.describe('등록 화면과의 연결', () => {
     await page.goto('/')
 
     // 먼저 등록해서 반·이름·호수를 저장시킨다.
-    await page.getByLabel(LABEL.className).fill('2반')
+    await page.getByLabel(LABEL.className).fill('2')
     await page.getByLabel(LABEL.studentName).fill('김철수')
     await page.getByLabel(LABEL.roomNumber).fill('305')
     await page.getByLabel(LABEL.password).fill('4321')
@@ -208,7 +208,7 @@ test.describe('등록 화면과의 연결', () => {
 
     await page.goto('/cancel')
 
-    await expect(page.getByLabel(LABEL.className)).toHaveValue('2반')
+    await expect(page.getByLabel(LABEL.className)).toHaveValue('2')
     await expect(page.getByLabel(LABEL.studentName)).toHaveValue('김철수')
     await expect(page.getByLabel(LABEL.roomNumber)).toHaveValue('305')
     // 비밀번호는 저장하지 않는다 — 공용 기기에 남으면 다음 사람이 남의 등록을 취소할 수 있다.
@@ -219,7 +219,7 @@ test.describe('등록 화면과의 연결', () => {
     await installApiMocks(page)
     await page.goto('/')
 
-    await page.getByLabel(LABEL.className).fill('2반')
+    await page.getByLabel(LABEL.className).fill('2')
     await page.getByLabel(LABEL.studentName).fill('김철수')
     await page.getByLabel(LABEL.roomNumber).fill('305')
     await page.getByLabel(LABEL.password).fill('4321')

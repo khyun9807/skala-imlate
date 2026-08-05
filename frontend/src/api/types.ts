@@ -36,6 +36,18 @@ export interface RegistrationRequest {
   cancelPassword: string
 }
 
+/**
+ * `GET /registrations/yesterday` — 어제 연장 복귀 인원 수 (PII 없음).
+ *
+ * 취소분을 제외한 최종 인원이다. `count`가 0이면 화면에 아무것도 표시하지 않는다.
+ */
+export interface YesterdayResponse {
+  /** 대상일(어제) `yyyy-MM-dd` */
+  date: string
+  /** 그날 연장 복귀한 최종 인원 수 */
+  count: number
+}
+
 /** `POST /registrations/cancel` 요청 바디 */
 export interface CancelRequest {
   className: string

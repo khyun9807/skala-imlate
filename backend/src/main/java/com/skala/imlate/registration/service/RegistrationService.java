@@ -4,6 +4,8 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -19,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.skala.imlate.common.error.ApiException;
 import com.skala.imlate.common.error.ErrorCode;
 import com.skala.imlate.common.properties.ImlateProperties;
+import com.skala.imlate.common.util.NumericTextOrder;
 import com.skala.imlate.common.web.ClientIpResolver;
 import com.skala.imlate.registration.domain.ReturnRegistration;
 import com.skala.imlate.registration.domain.ReturnRegistrationRepository;
@@ -75,10 +78,23 @@ public class RegistrationService {
     private static final Logger log = LoggerFactory.getLogger(RegistrationService.class);
 
     /**
-     * 정규화 후 허용 문자 집합. SPEC §5.5 의 {@code ^[가-힣A-Za-z0-9 ()\-]{1,20}$} 와 같은 문자 집합이며,
-     * 길이는 설정값({@code max-name-length} / {@code max-room-length})으로 따로 검사한다.
+     * 반·기숙사 호수 허용 문자 — <b>숫자만</b>(운영 요청).
+     *
+     * <p>길이는 설정값({@code max-name-length} / {@code max-room-length})으로 따로 검사한다.
      */
-    private static final Pattern ALLOWED_TEXT = Pattern.compile("^[가-힣A-Za-z0-9 ()\\-]+$");
+    private static final Pattern DIGITS_ONLY_FIELD = Pattern.compile("^[0-9]+$");
+
+    /**
+     * 이름 허용 문자 — <b>글자만</b>(한글 완성형·영문). 숫자·기호는 받지 않는다.
+     *
+     * <p>낱자(ㄱ, ㅏ 같은 자모)는 제외한다 — 이름이 될 수 없고, 조합이 덜 끝난 입력이 그대로 저장되면
+     * 나중에 취소할 때 같은 값을 다시 입력하지 못한다.
+     *
+     * <p><b>글자 사이의 공백 한 칸은 허용한다.</b> {@code "Alice Kim"} 처럼 띄어 쓰는 이름이 실제로 있고,
+     * 정규화가 앞뒤 공백을 지우고 연속 공백을 한 칸으로 줄인 뒤에 이 검사를 하므로
+     * 여기서 공백을 막으면 그런 이름이 통째로 거부된다.
+     */
+    private static final Pattern NAME_FIELD = Pattern.compile("^[가-힣A-Za-z]+( [가-힣A-Za-z]+)*$");
 
     /** 연속 공백을 한 칸으로 줄이기 위한 패턴. */
     private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s+");
@@ -158,9 +174,9 @@ public class RegistrationService {
         LocalDate date = windowPolicy.targetDate();
 
         // 2) 정규화 후 재검증 (컨트롤러의 @Valid 와 별개로 서비스 단에서 한 번 더 지킨다)
-        String className = normalizeAndValidate(command.className(), "반", maxNameLength);
-        String studentName = normalizeAndValidate(command.studentName(), "이름", maxNameLength);
-        String roomNumber = normalizeAndValidate(command.roomNumber(), "기숙사 호수", maxRoomLength);
+        String className = normalizeDigits(command.className(), "반", maxNameLength);
+        String studentName = normalizeName(command.studentName(), "이름", maxNameLength);
+        String roomNumber = normalizeDigits(command.roomNumber(), "기숙사 호수", maxRoomLength);
         String password = validatePassword(command.cancelPassword());
         String clientIp = (command.clientIp() == null || command.clientIp().isBlank())
                 ? ClientIpResolver.UNKNOWN : command.clientIp();
@@ -287,9 +303,9 @@ public class RegistrationService {
         LocalDate date = windowPolicy.targetDate();
 
         // 2) 정규화 후 재검증
-        String className = normalizeAndValidate(command.className(), "반", maxNameLength);
-        String studentName = normalizeAndValidate(command.studentName(), "이름", maxNameLength);
-        String roomNumber = normalizeAndValidate(command.roomNumber(), "기숙사 호수", maxRoomLength);
+        String className = normalizeDigits(command.className(), "반", maxNameLength);
+        String studentName = normalizeName(command.studentName(), "이름", maxNameLength);
+        String roomNumber = normalizeDigits(command.roomNumber(), "기숙사 호수", maxRoomLength);
         String password = validatePassword(command.password());
 
         // 3) 시도 횟수 확인. Redis 를 읽을 수 없어도 여기서 막힌다(fail-closed, CancelAttemptGuard 참고).
@@ -336,8 +352,21 @@ public class RegistrationService {
      */
     @Transactional(readOnly = true)
     public List<ReturnRegistration> findByDate(LocalDate date) {
-        return registrationRepository
+        List<ReturnRegistration> rows = registrationRepository
                 .findByRegistrationDateAndCancelledAtIsNullOrderByClassNameAscStudentNameAsc(date);
+
+        // 반을 숫자 크기 순으로 다시 정렬한다.
+        //
+        // DB 의 ORDER BY 는 VARCHAR 사전순이라 반이 숫자가 된 뒤로는 1, 10, 11, 2, 3 … 순이 된다.
+        // 반이 9개까지는 티가 안 나다가 10개가 되는 순간 사감 명단이 조용히 뒤죽박죽이 된다.
+        // 정렬은 애플리케이션에서 한다 — 하루 최대 200여 행이라 비용이 없고,
+        // DB 방언(CAST 문법)에 기대지 않아 로컬 H2·운영 MySQL 이 똑같이 동작한다.
+        List<ReturnRegistration> sorted = new ArrayList<>(rows);
+        sorted.sort(Comparator
+                .comparing(ReturnRegistration::getClassName, NumericTextOrder.INSTANCE)
+                .thenComparing(ReturnRegistration::getStudentName)
+                .thenComparing(ReturnRegistration::getRoomNumber, NumericTextOrder.INSTANCE));
+        return sorted;
     }
 
     /**
@@ -365,8 +394,42 @@ public class RegistrationService {
         return WHITESPACE_RUN.matcher(raw.trim()).replaceAll(" ");
     }
 
-    /** 정규화 후 비어 있지 않은지, 길이/문자 집합이 올바른지 검사한다. */
-    private static String normalizeAndValidate(String raw, String fieldLabel, int maxLength) {
+    /**
+     * 숫자만 받는 필드(반·기숙사 호수)를 정규화·검증한다.
+     *
+     * @param raw        원본 입력
+     * @param fieldLabel 오류 문구에 쓸 이름
+     * @param maxLength  최대 길이
+     * @return 검증된 값
+     */
+    private static String normalizeDigits(String raw, String fieldLabel, int maxLength) {
+        String value = normalizeNonEmpty(raw, fieldLabel, maxLength);
+        if (!DIGITS_ONLY_FIELD.matcher(value).matches()) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED,
+                    fieldLabel + "은(는) 숫자만 입력해 주세요.");
+        }
+        return value;
+    }
+
+    /**
+     * 글자만 받는 필드(이름)를 정규화·검증한다.
+     *
+     * @param raw        원본 입력
+     * @param fieldLabel 오류 문구에 쓸 이름
+     * @param maxLength  최대 길이
+     * @return 검증된 값
+     */
+    private static String normalizeName(String raw, String fieldLabel, int maxLength) {
+        String value = normalizeNonEmpty(raw, fieldLabel, maxLength);
+        if (!NAME_FIELD.matcher(value).matches()) {
+            throw ApiException.of(ErrorCode.VALIDATION_FAILED,
+                    fieldLabel + "에는 한글·영문만 사용할 수 있습니다.");
+        }
+        return value;
+    }
+
+    /** 정규화 후 비어 있지 않은지, 길이가 올바른지까지만 검사한다(문자 집합은 호출자가 본다). */
+    private static String normalizeNonEmpty(String raw, String fieldLabel, int maxLength) {
         String value = normalize(raw);
         if (value.isEmpty()) {
             throw ApiException.of(ErrorCode.VALIDATION_FAILED, fieldLabel + "을(를) 입력해 주세요.");
@@ -374,10 +437,6 @@ public class RegistrationService {
         if (value.length() > maxLength) {
             throw ApiException.of(ErrorCode.VALIDATION_FAILED,
                     fieldLabel + "은(는) " + maxLength + "자 이내로 입력해 주세요.");
-        }
-        if (!ALLOWED_TEXT.matcher(value).matches()) {
-            throw ApiException.of(ErrorCode.VALIDATION_FAILED,
-                    fieldLabel + "에는 한글·영문·숫자와 공백, 괄호, 하이픈만 사용할 수 있습니다.");
         }
         return value;
     }

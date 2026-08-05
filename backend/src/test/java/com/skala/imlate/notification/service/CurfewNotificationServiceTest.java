@@ -104,9 +104,9 @@ class CurfewNotificationServiceTest {
 
     private static List<ReturnRegistration> threeRegistrations() {
         return List.of(
-                TestFixtures.registration(1L, "1반", "홍길동", "302"),
-                TestFixtures.registration(2L, "1반", "김철수", "305"),
-                TestFixtures.registration(3L, "2반", "이영희", "410"));
+                TestFixtures.registration(1L, "1", "홍길동", "302"),
+                TestFixtures.registration(2L, "1", "김철수", "305"),
+                TestFixtures.registration(3L, "2", "이영희", "410"));
     }
 
     // ------------------------------------------------------------------
@@ -234,7 +234,7 @@ class CurfewNotificationServiceTest {
         assertThat(phone.getValue()).isEqualTo("01011112222");
         assertThat(title.getValue()).isEqualTo("[기숙사] 8/5 23:30 복귀 3명");
         assertThat(message.getValue())
-                .contains("홍길동", "302", "김철수", "305", "이영희", "410", "1반", "2반")
+                .contains("홍길동", "302", "김철수", "305", "이영희", "410", "1", "2")
                 .contains("23:30", "22:30")
                 .contains("https://imlate.example.com/lookup?date=2026-08-05&token=TKN");
 

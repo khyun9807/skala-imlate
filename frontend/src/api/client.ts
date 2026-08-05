@@ -13,6 +13,7 @@ import type {
   RegistrationRequest,
   RegistrationResponse,
   RegistrationWindow,
+  YesterdayResponse,
 } from './types'
 import { readItem, writeItem } from '../utils/storage'
 
@@ -177,6 +178,16 @@ export function cancelRegistration(payload: CancelRequest): Promise<CancelRespon
 /** 사감용 조회 페이지 데이터 */
 export function fetchLookup(date: string | null, token: string): Promise<LookupResponse> {
   return request<LookupResponse>('/lookup', { query: { date: date ?? undefined, token } })
+}
+
+/**
+ * 어제 연장 복귀 인원 수 (등록 화면 하단 안내 문구용).
+ *
+ * 이 값은 화면을 꾸미는 부가 정보라, 실패해도 등록을 막아서는 안 된다.
+ * 그래서 예외를 밖으로 던지지 않고 `null` 을 돌려준다 — 호출부는 그냥 문구를 감춘다.
+ */
+export function fetchYesterday(): Promise<YesterdayResponse | null> {
+  return request<YesterdayResponse>('/registrations/yesterday').catch(() => null)
 }
 
 // ---------------------------------------------------------------- 내부 유틸

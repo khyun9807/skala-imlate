@@ -43,18 +43,18 @@ class CurfewNoticeRendererTest {
     /** 3개 반에 걸친 12명 샘플 명단(반 → 이름 정렬 순서). */
     private static List<NoticePayload.Row> sampleRows() {
         List<NoticePayload.Row> rows = new ArrayList<>();
-        rows.add(new NoticePayload.Row(1, "1반", "김가영", "301"));
-        rows.add(new NoticePayload.Row(2, "1반", "남궁민수", "302"));
-        rows.add(new NoticePayload.Row(3, "1반", "박준호", "305"));
-        rows.add(new NoticePayload.Row(4, "1반", "홍길동", "302"));
-        rows.add(new NoticePayload.Row(5, "2반", "Alice Kim", "410"));
-        rows.add(new NoticePayload.Row(6, "2반", "서지우", "411"));
-        rows.add(new NoticePayload.Row(7, "2반", "이수민", "412"));
-        rows.add(new NoticePayload.Row(8, "2반", "정예린", "410"));
-        rows.add(new NoticePayload.Row(9, "3반", "최민재", "A-201"));
-        rows.add(new NoticePayload.Row(10, "3반", "한도윤", "A-202"));
-        rows.add(new NoticePayload.Row(11, "3반", "황보름", "A-203"));
-        rows.add(new NoticePayload.Row(12, "3반", "Bob Lee", "A-204"));
+        rows.add(new NoticePayload.Row(1, "1", "김가영", "301"));
+        rows.add(new NoticePayload.Row(2, "1", "남궁민수", "302"));
+        rows.add(new NoticePayload.Row(3, "1", "박준호", "305"));
+        rows.add(new NoticePayload.Row(4, "1", "홍길동", "302"));
+        rows.add(new NoticePayload.Row(5, "2", "Alice Kim", "410"));
+        rows.add(new NoticePayload.Row(6, "2", "서지우", "411"));
+        rows.add(new NoticePayload.Row(7, "2", "이수민", "412"));
+        rows.add(new NoticePayload.Row(8, "2", "정예린", "410"));
+        rows.add(new NoticePayload.Row(9, "3", "최민재", "A-201"));
+        rows.add(new NoticePayload.Row(10, "3", "한도윤", "A-202"));
+        rows.add(new NoticePayload.Row(11, "3", "황보름", "A-203"));
+        rows.add(new NoticePayload.Row(12, "3", "Bob Lee", "A-204"));
         return rows;
     }
 
@@ -97,7 +97,7 @@ class CurfewNoticeRendererTest {
         assertThat(body).contains("12명");
 
         // 반 · 이름 · 호수
-        assertThat(body).contains("1반", "2반", "3반");
+        assertThat(body).contains("1", "2", "3");
         for (NoticePayload.Row row : payload.rows()) {
             assertThat(body).contains(row.studentName());
             assertThat(body).contains(row.roomNumber());
@@ -292,7 +292,7 @@ class CurfewNoticeRendererTest {
     @DisplayName("이름에 HTML 특수문자가 있어도 이스케이프되어 그대로 삽입되지 않는다")
     void HTML_특수문자는_이스케이프된다() {
         NoticePayload payload = new NoticePayload(TestFixtures.DATE,
-                List.of(new NoticePayload.Row(1, "1반", "<script>", "302")), LOOKUP_URL,
+                List.of(new NoticePayload.Row(1, "1", "<script>", "302")), LOOKUP_URL,
                 TestFixtures.RETURN_TIME, TestFixtures.CURFEW_TIME, null, null);
 
         String html = renderer.emailHtml(payload);

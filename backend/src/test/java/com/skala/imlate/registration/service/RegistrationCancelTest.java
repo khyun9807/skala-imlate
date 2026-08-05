@@ -77,13 +77,13 @@ class RegistrationCancelTest {
     }
 
     private static CancelCommand command(String password) {
-        return new CancelCommand("1반", "홍길동", "302", password, "1.2.3.4");
+        return new CancelCommand("1", "홍길동", "302", password, "1.2.3.4");
     }
 
     @Test
     @DisplayName("반·이름·호수와 비밀번호가 모두 맞으면 취소된다")
     void 모두_맞으면_취소된다() {
-        ReturnRegistration row = TestFixtures.registration(7L, "1반", "홍길동", "302");
+        ReturnRegistration row = TestFixtures.registration(7L, "1", "홍길동", "302");
         existing(row);
 
         CancelResult result = service.cancel(command(TestFixtures.CANCEL_PASSWORD));
@@ -98,7 +98,7 @@ class RegistrationCancelTest {
     @Test
     @DisplayName("비밀번호가 틀리면 취소되지 않고 실패로 집계된다")
     void 비밀번호가_틀리면_취소되지_않는다() {
-        existing(TestFixtures.registration(7L, "1반", "홍길동", "302"));
+        existing(TestFixtures.registration(7L, "1", "홍길동", "302"));
 
         assertThatThrownBy(() -> service.cancel(command("9999")))
                 .isInstanceOf(ApiException.class)
@@ -118,7 +118,7 @@ class RegistrationCancelTest {
         ApiException noSuchRegistration = catchApiException(() -> service.cancel(command("1234")));
 
         // (2) 등록은 있는데 비밀번호가 틀린 경우
-        existing(TestFixtures.registration(7L, "1반", "홍길동", "302"));
+        existing(TestFixtures.registration(7L, "1", "홍길동", "302"));
         ApiException wrongPassword = catchApiException(() -> service.cancel(command("9999")));
 
         // 코드도 문구도 같아야 한다. 하나라도 다르면 "오늘 그 사람이 등록했는지"를 밖에서 알아낼 수 있다.
@@ -132,7 +132,7 @@ class RegistrationCancelTest {
     @DisplayName("비밀번호가 없는 행(V2 이전 등록·WAL 복구분)은 취소할 수 없고, 실패 응답도 동일하다")
     void 비밀번호가_없는_행은_취소할_수_없다() {
         // 해시가 null 인 행 — 마이그레이션 이전에 등록됐거나 WAL 대사로 복구된 경우다.
-        ReturnRegistration noPassword = ReturnRegistration.create(TestFixtures.DATE, "1반", "홍길동", "302",
+        ReturnRegistration noPassword = ReturnRegistration.create(TestFixtures.DATE, "1", "홍길동", "302",
                 "wal-legacy", TestFixtures.DATE.atTime(20, 0), TestFixtures.DATE.atTime(20, 0), null);
         existing(noPassword);
 
@@ -146,7 +146,7 @@ class RegistrationCancelTest {
     @DisplayName("시도 횟수를 다 쓰면 비밀번호를 확인하기도 전에 거절한다")
     void 시도_초과면_비밀번호를_보기_전에_막는다() {
         when(cancelAttemptGuard.allowAttempt(any(), anyString())).thenReturn(false);
-        existing(TestFixtures.registration(7L, "1반", "홍길동", "302"));
+        existing(TestFixtures.registration(7L, "1", "홍길동", "302"));
 
         // 비밀번호가 맞더라도 막힌다.
         assertThatThrownBy(() -> service.cancel(command(TestFixtures.CANCEL_PASSWORD)))
@@ -163,7 +163,7 @@ class RegistrationCancelTest {
     @Test
     @DisplayName("이미 취소된 등록에 같은 비밀번호로 다시 요청하면 멱등하게 성공한다")
     void 이미_취소된_등록은_멱등하다() {
-        ReturnRegistration cancelled = TestFixtures.cancelledRegistration(7L, "1반", "홍길동", "302");
+        ReturnRegistration cancelled = TestFixtures.cancelledRegistration(7L, "1", "홍길동", "302");
         existing(cancelled);
         // 이미 취소 상태이므로 writer 는 "바뀐 것 없음"을 보고한다.
         when(registrationWriter.cancel(any(), any())).thenReturn(false);
@@ -209,13 +209,13 @@ class RegistrationCancelTest {
     @Test
     @DisplayName("취소한 사람이 다시 등록하면 새 등록으로 되살아난다(유니크 제약에 막히지 않는다)")
     void 취소_후_재등록은_되살리기로_처리된다() {
-        ReturnRegistration cancelled = TestFixtures.cancelledRegistration(7L, "1반", "홍길동", "302");
+        ReturnRegistration cancelled = TestFixtures.cancelledRegistration(7L, "1", "홍길동", "302");
         existing(cancelled);
         when(registrationWriter.reactivate(any(), anyString(), any()))
-                .thenAnswer(invocation -> TestFixtures.registration(7L, "1반", "홍길동", "302"));
+                .thenAnswer(invocation -> TestFixtures.registration(7L, "1", "홍길동", "302"));
 
         RegistrationResult result = service.register(new RegistrationCommand(
-                "1반", "홍길동", "302", "5678", "1.2.3.4"));
+                "1", "홍길동", "302", "5678", "1.2.3.4"));
 
         // duplicate=false → 컨트롤러가 201 을 준다. 사용자 입장에서 방금 한 것은 "등록"이다.
         assertThat(result.duplicate()).isFalse();
@@ -229,12 +229,12 @@ class RegistrationCancelTest {
     @Test
     @DisplayName("되살릴 때 비밀번호는 이번에 입력한 값으로 교체된다")
     void 되살릴_때_비밀번호가_교체된다() {
-        ReturnRegistration cancelled = TestFixtures.cancelledRegistration(7L, "1반", "홍길동", "302");
+        ReturnRegistration cancelled = TestFixtures.cancelledRegistration(7L, "1", "홍길동", "302");
         existing(cancelled);
         when(registrationWriter.reactivate(any(), anyString(), any()))
-                .thenAnswer(invocation -> TestFixtures.registration(7L, "1반", "홍길동", "302"));
+                .thenAnswer(invocation -> TestFixtures.registration(7L, "1", "홍길동", "302"));
 
-        service.register(new RegistrationCommand("1반", "홍길동", "302", "5678", "1.2.3.4"));
+        service.register(new RegistrationCommand("1", "홍길동", "302", "5678", "1.2.3.4"));
 
         org.mockito.ArgumentCaptor<String> hash = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(registrationWriter).reactivate(eq(7L), hash.capture(), any());

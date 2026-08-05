@@ -263,10 +263,10 @@ const adminReconciliation = async (date) => (await admin(`/admin/reconciliation?
 
 // ── 테스트 데이터 ────────────────────────────────────────────────────────────
 const STUDENTS = [
-  ['1반', '김하늘', '301'], ['1반', '박서준', '302'], ['1반', '이도윤', '303'],
-  ['2반', '최지우', '401'], ['2반', '정민서', '402'], ['2반', '강하준', '403'],
-  ['3반', '윤서아', '501'], ['3반', '임채원', '502'], ['3반', '한지훈', '503'],
-  ['4반', '오유진', '601'], ['4반', 'Alice Kim', '602'], ['4반', '남궁민수', 'B-101'],
+  ['1', '김하늘', '301'], ['1', '박서준', '302'], ['1', '이도윤', '303'],
+  ['2', '최지우', '401'], ['2', '정민서', '402'], ['2', '강하준', '403'],
+  ['3', '윤서아', '501'], ['3', '임채원', '502'], ['3', '한지훈', '503'],
+  ['4', '오유진', '601'], ['4', 'Alice Kim', '602'], ['4', '남궁민수', '101'],
 ]
 
 /**
@@ -428,7 +428,7 @@ async function run() {
   info('기숙사 공용 와이파이(NAT) 뒤에서는 교육생 전원이 같은 공인 IP 하나로 보인다.')
   info('그래서 IP 버킷은 "한 회선의 대량 폭주 차단" 전용으로 격하하고,')
   info('"같은 사람의 도배"는 요청 본문에서 뽑은 개인 식별자 버킷이 막는다. (SPEC §8)')
-  info('※ 이 섹션은 자기가 만든 등록(호수 RL*)을 끝에서 스스로 지운다 — 뒤 섹션의 건수 단언을 지키기 위함.')
+  info('※ 이 섹션은 자기가 만든 등록(호수 99xx)을 끝에서 스스로 지운다 — 뒤 섹션의 건수 단언을 지키기 위함.')
 
   // 3-0) 설정값 검사 — 요청을 보내지 않고도 알 수 있는 결함을 여기서 먼저 잡는다.
   //      한도를 스크립트에 하드코딩하지 않고 기동 중인 앱에서 읽는다.
@@ -461,9 +461,9 @@ async function run() {
   //      바로 이 다음 요청부터 429 가 났고, 그것이 "공용 와이파이에서 9번째 학생부터 막힌다"는
   //      운영 불가 결함이었다. 여기가 그 회귀를 잡는 자리다.
   const SAME_IP_OTHERS = [
-    ['9반', '동일IP타인1', 'RL901'],
-    ['9반', '동일IP타인2', 'RL902'],
-    ['9반', '동일IP타인3', 'RL903'],
+    ['9', '동일아이피갑', '9901'],
+    ['9', '동일아이피을', '9902'],
+    ['9', '동일아이피병', '9903'],
   ]
   for (const [c, n, r] of SAME_IP_OTHERS) {
     const res = await register(c, n, r)
@@ -474,7 +474,7 @@ async function run() {
   // 3-2) ★ 같은 IP · 같은 사람 반복 → 429 로 막혀야 한다 (개인 식별자 버킷)
   // 본문은 반드시 **검증을 통과하는** 값이어야 한다. 필수 항목(취소 비밀번호)이 빠지면
   // 컨트롤러의 @Valid 가 400 으로 먼저 잘라내서, 정작 보려던 rate limit 판정에 닿지 못한다.
-  const SPAM = { className: '9반', studentName: '도배사용자', roomNumber: 'RL904', cancelPassword: CANCEL_PASSWORD }
+  const SPAM = { className: '9', studentName: '도배사용자', roomNumber: '9904', cancelPassword: CANCEL_PASSWORD }
   let spamFirst = null
   let spamBlocked = null
   let spamAttempts = 0
@@ -509,7 +509,7 @@ async function run() {
   }
   check('도배해도 DB 행은 1건 (멱등 + 차단된 요청은 저장되지 않음)',
     Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE student_name='도배사용자'`)) === 1)
-  const spamWal = walFieldEntries(TODAY).filter((w) => w.entry?.roomNumber === 'RL904').length
+  const spamWal = walFieldEntries(TODAY).filter((w) => w.entry?.roomNumber === '9904').length
   check('차단된 요청은 WAL 에도 남지 않음 (WAL 항목 수 == 통과 건수)',
     spamWal === spamAccepted, `wal=${spamWal} 통과=${spamAccepted}`)
 
@@ -531,9 +531,9 @@ async function run() {
     `${forgedKeys.join(', ')} — trusted-proxies 가 비어 있는데 XFF 를 신뢰하고 있다.`)
 
   // 3-4) 이 섹션이 만든 임시 등록을 DB/WAL 에서 되돌린다(뒤 섹션의 "정확히 N건" 단언 보호).
-  const rlRows = Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE room_number LIKE 'RL%'`))
-  mysql(`DELETE FROM return_registration WHERE room_number LIKE 'RL%'`)
-  const rlWal = purgeWal(TODAY, (e) => String(e?.roomNumber ?? '').startsWith('RL'))
+  const rlRows = Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE room_number LIKE '99%'`))
+  mysql(`DELETE FROM return_registration WHERE room_number LIKE '99%'`)
+  const rlWal = purgeWal(TODAY, (e) => String(e?.roomNumber ?? '').startsWith('99'))
 
   // 등록 통계 카운터도 함께 되돌린다.
   // 통계는 RegistrationCreatedEvent 로 INCR 되므로 DB 행을 지워도 자동으로 줄지 않는다.
@@ -550,10 +550,10 @@ async function run() {
   section('4. 입력 검증')
   const cases = [
     ['빈 반', { className: '', studentName: '홍길동', roomNumber: '101' }],
-    ['빈 이름', { className: '1반', studentName: '   ', roomNumber: '101' }],
-    ['스크립트 태그', { className: '1반', studentName: '<script>x</script>', roomNumber: '101' }],
-    ['20자 초과', { className: '1반', studentName: '가'.repeat(21), roomNumber: '101' }],
-    ['개행 문자', { className: '1반', studentName: '홍길동\n관리자', roomNumber: '101' }],
+    ['빈 이름', { className: '1', studentName: '   ', roomNumber: '101' }],
+    ['스크립트 태그', { className: '1', studentName: '<script>x</script>', roomNumber: '101' }],
+    ['20자 초과', { className: '1', studentName: '가'.repeat(21), roomNumber: '101' }],
+    ['개행 문자', { className: '1', studentName: '홍길동\n관리자', roomNumber: '101' }],
   ]
   for (const [label, body] of cases) {
     const res = await req('POST', '/registrations', { body })
@@ -563,7 +563,7 @@ async function run() {
 
   // WAL append 는 정규화·검증을 **통과한 뒤에만** 일어난다(R7 쓰기 순서 2→3단계).
   // 잘못된 입력이나 429 로 막힌 요청이 WAL 을 오염시키면 대사가 유령 인원을 복구하게 된다.
-  // (§3 이 만든 RL* 항목은 §3-4 에서 스스로 지웠으므로, 여기 기준값은 여전히 §2 의 8건이다)
+  // (§3 이 만든 99xx 항목은 §3-4 에서 스스로 지웠으므로, 여기 기준값은 여전히 §2 의 8건이다)
   const walAfterInvalid = Number(redis('hlen', `imlate:wal:${TODAY}`))
   check('검증 실패·429 요청은 WAL 에 남지 않음 (정상 등록 8건 그대로)',
     walAfterInvalid === 8, `hlen=${walAfterInvalid}`)
@@ -696,7 +696,7 @@ async function run() {
   section('8. DB 쓰기 실패분(WAL PENDING) 복구 · 통계 집계됨')
   const pendingId = 'pending-wal-0000-0000-000000000001'
   const pendingEntry = JSON.stringify({
-    walId: pendingId, registrationDate: TODAY, className: '5반', studentName: '유실복구',
+    walId: pendingId, registrationDate: TODAY, className: '5', studentName: '유실복구',
     roomNumber: '701', registeredAt: `${TODAY}T21:00:00`, status: 'PENDING', clientIp: '127.0.0.1',
   })
   redis('hset', walKey, pendingId, pendingEntry)
@@ -745,7 +745,7 @@ async function run() {
   check('문자에 22:30 잠김 안내', sms.includes('22:30'))
   check('문자에 조회 URL', /https?:\/\/\S+lookup\?date=/.test(sms + mailText))
   check('이메일에 반·이름·호수 모두 포함',
-    mailText.includes('1반') && mailText.includes('김하늘') && mailText.includes('301'))
+    mailText.includes('1') && mailText.includes('김하늘') && mailText.includes('301'))
   // 피드백 2번: 검증·통계는 사감에게 보여주지 않는다. 다시 들어가면 회귀다.
   check('문자에 검증(대사) 문구 없음', !/검증|WAL|대사/.test(sms), sms.match(/검증.*/)?.[0] ?? '')
   check('문자에 통계 문구 없음', !/통계|방문자/.test(sms), sms.match(/통계.*/)?.[0] ?? '')
@@ -836,7 +836,7 @@ async function run() {
   section('13-1. 등록 취소 (비밀번호 본인 확인)')
   clearRateLimit()
 
-  const CANCEL_TARGET = ['9반', '취소테스트', '901']
+  const CANCEL_TARGET = ['9', '취소테스트', '901']
   const beforeCancelCount = Number(mysql(
     `SELECT COUNT(*) FROM return_registration WHERE registration_date='${TODAY}' AND cancelled_at IS NULL`))
 
@@ -851,7 +851,7 @@ async function run() {
     mysql(`SELECT COUNT(*) FROM return_registration WHERE registration_date='${TODAY}'`
       + ` AND student_name='${CANCEL_TARGET[1]}' AND cancelled_at IS NULL`) === '1')
 
-  const noSuchPerson = await cancel('9반', '존재하지않는사람', '999')
+  const noSuchPerson = await cancel('9', '존재하지않는사람', '999')
   check('없는 등록을 취소해도 같은 코드로 답한다 (등록 여부 비노출)',
     noSuchPerson.status === 400 && noSuchPerson.json?.code === 'CANCEL_REJECTED',
     `status=${noSuchPerson.status} code=${noSuchPerson.json?.code}`)
@@ -935,7 +935,7 @@ async function run() {
     execFileSync('docker', ['stop', REDIS_CONTAINER], { stdio: 'ignore' })
     await sleep(2000)
 
-    const duringOutage = await register('6반', '레디스장애중', '801')
+    const duringOutage = await register('6', '레디스장애중', '801')
     check('Redis 가 죽어도 등록은 성공한다', duringOutage.status === 201,
       `status=${duringOutage.status} ${duringOutage.text.slice(0, 160)}`)
     check('DB 에는 정상 저장됨',
@@ -978,8 +978,8 @@ async function run() {
     section('15. 장애 훈련 — MySQL 정지 중 등록 의도가 WAL 에 남는가 (R7 새 쓰기 순서)')
     clearRateLimit()
 
-    const DOWN_CLASS = '7반'
-    const DOWN_NAME = 'DB장애중'
+    const DOWN_CLASS = '7'
+    const DOWN_NAME = '디비장애중'
     const DOWN_ROOM = '901'
 
     // DB 가 죽으면 SELECT 도 못 하므로, 비교 기준값은 **정지 전에** 미리 읽어 둔다.

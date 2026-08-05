@@ -24,8 +24,12 @@ import { useLastInput } from '../composables/useLastInput'
 import { useServerClock } from '../composables/useServerClock'
 import { formatClockTime, formatKoreanDate, formatTimeHm, todayIsoLocal } from '../utils/format'
 
-/** 서버 검증 규칙과 동일한 허용 문자 (SPEC §5.5) */
-const ALLOWED_PATTERN = /^[가-힣A-Za-z0-9 ()\-]{1,20}$/
+/**
+ * 서버 검증 규칙과 동일한 허용 문자 (SPEC §5.5).
+ * 반·기숙사 호수는 숫자만, 이름은 글자만(한글·영문).
+ */
+const DIGITS_PATTERN = /^[0-9]{1,20}$/
+const NAME_PATTERN = /^[가-힣A-Za-z]+( [가-힣A-Za-z]+)*$/
 const MAX_LENGTH = 20
 
 /** 비밀번호 자릿수. 서버 `imlate.registration.cancel.password-length` 와 같아야 한다. */
@@ -48,9 +52,17 @@ const TOO_LONG_MESSAGES: Record<FieldKey, string> = {
   password: `비밀번호는 숫자 ${PASSWORD_LENGTH}자리로 입력해 주세요.`,
 }
 
-const PATTERN_MESSAGE = '한글·영문·숫자와 공백, 괄호( ), 하이픈(-)만 사용할 수 있습니다.'
+const PATTERN_MESSAGES: Record<FieldKey, string> = {
+  className: '반은 숫자만 입력해 주세요.',
+  studentName: '이름에는 한글·영문만 사용할 수 있습니다.',
+  roomNumber: '기숙사 호수는 숫자만 입력해 주세요.',
+  password: '',
+}
 
 const FIELD_KEYS: FieldKey[] = ['className', 'studentName', 'roomNumber', 'password']
+
+/** 숫자만 받는 필드. 이름은 한글 조합이 깨지므로 절대 넣지 않는다. */
+const DIGIT_FIELDS: FieldKey[] = ['className', 'roomNumber']
 
 const {
   windowInfo,
@@ -156,8 +168,9 @@ function validateField(key: FieldKey): string {
   if (value.length > MAX_LENGTH) {
     return TOO_LONG_MESSAGES[key]
   }
-  if (!ALLOWED_PATTERN.test(value)) {
-    return PATTERN_MESSAGE
+  const pattern = key === 'studentName' ? NAME_PATTERN : DIGITS_PATTERN
+  if (!pattern.test(value)) {
+    return PATTERN_MESSAGES[key]
   }
   return ''
 }
@@ -168,7 +181,15 @@ function onFieldBlur(key: FieldKey): void {
 }
 
 function onFieldInput(key: FieldKey, value: string): void {
-  form[key] = key === 'password' ? value.replace(/\D/g, '').slice(0, PASSWORD_LENGTH) : value
+  // 숫자 칸은 입력 순간에 걸러내되, **이름 칸은 건드리지 않는다** —
+  // 한글은 ㅎ → 호 → 홍 처럼 조합 중간 상태를 거치므로 필터를 걸면 입력 자체가 깨진다.
+  if (key === 'password') {
+    form[key] = value.replace(/\D/g, '').slice(0, PASSWORD_LENGTH)
+  } else if (DIGIT_FIELDS.includes(key)) {
+    form[key] = value.replace(/\D/g, '').slice(0, MAX_LENGTH)
+  } else {
+    form[key] = value
+  }
   if (touched[key]) {
     errors[key] = validateField(key)
   }
@@ -372,9 +393,9 @@ const submitLabel = computed(() => {
             :error="errors.className"
             :suggestions="classSuggestions"
             :disabled="inputsDisabled"
-            placeholder="예: 1반"
+            placeholder="예: 1"
             autocomplete="off"
-            inputmode="text"
+            inputmode="numeric"
             enterkeyhint="next"
             @update:model-value="(value: string) => onFieldInput('className', value)"
             @blur="onFieldBlur('className')"
@@ -406,7 +427,7 @@ const submitLabel = computed(() => {
             :disabled="inputsDisabled"
             placeholder="예: 302"
             autocomplete="off"
-            inputmode="text"
+            inputmode="numeric"
             enterkeyhint="next"
             @update:model-value="(value: string) => onFieldInput('roomNumber', value)"
             @blur="onFieldBlur('roomNumber')"
@@ -433,7 +454,8 @@ const submitLabel = computed(() => {
           <!-- 확인 단계: 무엇이 취소되는지 눈으로 확인하게 한다 -->
           <p v-if="confirming" class="alert alert--warn confirm" role="alert">
             <span class="alert__title">아래 등록을 취소합니다</span>
-            <span class="confirm__target">{{ form.className }} · {{ form.studentName }} · {{ form.roomNumber }}호</span>
+            <!-- 반이 숫자만 남으면서 라벨이 없으면 "1 · 홍길동 · 302호" 처럼 무엇이 반인지 안 보인다. -->
+            <span class="confirm__target">{{ form.className }}반 · {{ form.studentName }} · {{ form.roomNumber }}호</span>
             <span class="text-sm">
               취소하면 오늘 밤 명단에서 빠집니다. 한 번 더 누르면 취소가 완료됩니다.
             </span>
