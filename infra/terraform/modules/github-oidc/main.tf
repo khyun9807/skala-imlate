@@ -60,18 +60,36 @@ locals {
   )
 
   # ---- 허용할 토큰 sub 목록 ----
-  #   브랜치 푸시     repo:owner/repo:ref:refs/heads/main
+  #
+  #   브랜치 푸시      repo:owner/repo:ref:refs/heads/main
   #   Environment 사용 repo:owner/repo:environment:production
-  # 잡에 environment 가 선언되면 GitHub 은 environment 형태의 sub 만 발급한다.
-  branch_subjects = [
-    for branch in var.allowed_branches :
-    "repo:${local.github_repo_fullname}:ref:refs/heads/${branch}"
+  #   잡에 environment 가 선언되면 GitHub 은 environment 형태의 sub 만 발급한다.
+  #
+  #   ★ 중요 — GitHub 은 이름 뒤에 **숫자 ID 를 붙인 immutable 형식**으로도 sub 를 발급한다.
+  #     예) repo:khyun9807@131232309/skala-imlate@1323048778:environment:production
+  #     리포지터리 이름이 재사용될 때 옛 이름으로 권한을 탈취하는 것을 막기 위한 형식이다.
+  #     이름만 적은 조건은 이 sub 와 매칭되지 않아
+  #     "Not authorized to perform sts:AssumeRoleWithWebIdentity" 로 거부된다.
+  #     그래서 `owner@*/repo@*` 형태를 함께 허용한다. 구분자 `@` 를 반드시 포함시켜
+  #     `khyun9807other` 같은 **다른 계정이 매칭되지 않도록** 한다(단순 접미사 와일드카드 금지).
+  repo_patterns = [
+    local.github_repo_fullname,                   # owner/repo
+    "${var.github_owner}@*/${var.github_repo}@*", # owner@<id>/repo@<id>
   ]
 
-  environment_subjects = [
-    for env in var.allowed_environments :
-    "repo:${local.github_repo_fullname}:environment:${env}"
-  ]
+  branch_subjects = flatten([
+    for pattern in local.repo_patterns : [
+      for branch in var.allowed_branches :
+      "repo:${pattern}:ref:refs/heads/${branch}"
+    ]
+  ])
+
+  environment_subjects = flatten([
+    for pattern in local.repo_patterns : [
+      for env in var.allowed_environments :
+      "repo:${pattern}:environment:${env}"
+    ]
+  ])
 
   allowed_subjects = distinct(concat(
     local.branch_subjects,
