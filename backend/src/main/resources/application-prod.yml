@@ -110,7 +110,7 @@ imlate:
     heartbeat:
       enabled: ${IMLATE_NOTIFICATION_HEARTBEAT_ENABLED:true}
       # 운영에서는 CloudWatch 지표를 실제로 올린다.
-      # 이 지표가 21:50 이후 올라오지 않으면 "발송이 아예 실행되지 않았다"는 뜻이고,
+      # 이 지표가 22:25 이후 올라오지 않으면 "발송이 아예 실행되지 않았다"는 뜻이고,
       # modules/monitoring 의 하트비트 알람이 통금(22:30) 전에 이를 알려 준다.
       publisher: "${IMLATE_NOTIFICATION_HEARTBEAT_PUBLISHER:cloudwatch}"
       namespace: "${IMLATE_NOTIFICATION_HEARTBEAT_NAMESPACE:Imlate}"

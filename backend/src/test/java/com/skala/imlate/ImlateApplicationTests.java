@@ -73,9 +73,11 @@ class ImlateApplicationTests {
         ImlateProperties properties = context.getBean(ImlateProperties.class);
 
         assertThat(properties.timezone()).isEqualTo("Asia/Seoul");
-        // 등록 마감은 운영자 요청으로 22:00 → 21:45 로 조정되었다.
+        // 등록 마감은 운영자 요청으로 22:00 → 21:45 → 22:15 로 조정되었다.
+        // 취소는 등록보다 5분 늦게(22:20) 닫혀, 마감 직전 등록을 되돌릴 틈을 준다.
         // 통금(22:30)·일괄 개방(23:30)은 기숙사 규정이라 바뀌지 않는다.
-        assertThat(properties.registration().closeTime().toString()).isEqualTo("21:45");
+        assertThat(properties.registration().closeTime().toString()).isEqualTo("22:15");
+        assertThat(properties.registration().cancelCloseTime().toString()).isEqualTo("22:20");
         assertThat(properties.registration().returnTime().toString()).isEqualTo("23:30");
         assertThat(properties.registration().curfewTime().toString()).isEqualTo("22:30");
         assertThat(properties.lookup().tokenSecret()).isNotBlank();

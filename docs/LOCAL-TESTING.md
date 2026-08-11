@@ -327,15 +327,15 @@ NAT 뒤 200명은 어떤 숫자를 넣어도 결국 막힌다([docs/SPEC.md §8]
 
 ## 3. 시간에 얽힌 시나리오를 로컬에서 검증하는 법 ★가장 중요★
 
-이 시스템의 심장은 **21:45 마감 → 21:50 발송 → 22:05/22:20 재시도** 다.
+이 시스템의 심장은 **22:15 마감 → 22:25 발송 → 22:35/22:45 재시도** 다.
 그런데 그 시각을 기다려서 테스트할 수는 없다. **설정만 바꿔서 몇 분 뒤에 재현**한다.
 
 ```
-00:00 등록 시작 → 21:45 마감 → 21:50 발송 → (22:05 / 22:20 재시도)
+00:00 등록 시작 → 22:15 마감 → 22:25 발송 → (22:35 / 22:45 재시도)
                 → 22:30 문 잠김 → 23:30 일괄 개방
 ```
 
-> 마감 21:45 · 발송 21:50 은 운영자 요청으로 앞당겨진 값이다(원래 22:00 / 22:10).
+> 마감 22:15 · 발송 22:25 은 운영자 요청으로 옮겨진 값이다(원래 22:00 / 22:10).
 > **통금 22:30 과 일괄 개방 23:30 은 바뀌지 않았다.** 아래 시나리오에서 두 값을 건드리지 마라.
 
 ### 3.1 만질 수 있는 스위치 (실제로 존재하는 것만)
@@ -343,12 +343,13 @@ NAT 뒤 200명은 어떤 숫자를 넣어도 결국 막힌다([docs/SPEC.md §8]
 | 환경변수 | 프로퍼티 이름 | 기본값 | 의미 |
 |---|---|---|---|
 | `IMLATE_TIMEZONE` | `imlate.timezone` | `Asia/Seoul` | 서비스 기준 시계 + **모든 cron 의 zone** |
-| `IMLATE_REGISTRATION_CLOSE_TIME` | `imlate.registration.close-time` | `21:45` | 이 시각 **정각부터** 등록 거부(`409 REGISTRATION_CLOSED`) |
+| `IMLATE_REGISTRATION_CLOSE_TIME` | `imlate.registration.close-time` | `22:15` | 이 시각 **정각부터** 등록 거부(`409 REGISTRATION_CLOSED`) |
+| `IMLATE_REGISTRATION_CANCEL_CLOSE_TIME` | `imlate.registration.cancel-close-time` | `22:20` | 이 시각 **정각부터** 취소 거부. 등록 마감보다 늦어야 의미가 있다 |
 | `IMLATE_REGISTRATION_RETURN_TIME` | `imlate.registration.return-time` | `23:30` | 안내 문구용 복귀 시각 |
 | `IMLATE_REGISTRATION_CURFEW_TIME` | `imlate.registration.curfew-time` | `22:30` | 안내 문구용 문 잠김 시각 |
 | `IMLATE_NOTIFICATION_ENABLED` | `imlate.notification.enabled` | `true` | `false` 면 스케줄러가 아무것도 하지 않음(`skipReason=DISABLED`) |
-| `IMLATE_NOTIFICATION_DISPATCH_CRON` | `imlate.notification.dispatch-cron` | `0 50 21 * * *` | **정기 발송** cron (6필드, 초 포함) = 21:50 |
-| `IMLATE_NOTIFICATION_RETRY_CRON` | `imlate.notification.retry-cron` | `0 5,20 22 * * *` | **실패 채널 재시도** cron (6필드) = 22:05 / 22:20 |
+| `IMLATE_NOTIFICATION_DISPATCH_CRON` | `imlate.notification.dispatch-cron` | `0 25 22 * * *` | **정기 발송** cron (6필드, 초 포함) = 22:25 |
+| `IMLATE_NOTIFICATION_RETRY_CRON` | `imlate.notification.retry-cron` | `0 35,45 22 * * *` | **실패 채널 재시도** cron (6필드) = 22:35 / 22:45 |
 | `IMLATE_NOTIFICATION_MAX_ATTEMPTS` | `imlate.notification.max-attempts` | `3` | 채널당 최대 시도 횟수(백오프 1s→2s→4s, 상한 8s) |
 | `IMLATE_NOTIFICATION_LOCK_TTL_SECONDS` | `imlate.notification.lock-ttl-seconds` | `300` | 중복 발송 방지 분산 락 TTL |
 | `IMLATE_STATS_SNAPSHOT_CRON` | `imlate.stats.snapshot-cron` | `0 5 0 * * *` | 전일 통계 확정 + 보존기간 정리 |
@@ -396,7 +397,7 @@ $env:IMLATE_REGISTRATION_CLOSE_TIME = "21:30"
 > `imlate.rate-limit.enabled`, `imlate.lookup.token-ttl-hours` 는 local 프로파일에 리터럴로 박혀 있다.
 > 이것들을 바꾸려면 **반드시 `--args` 프로퍼티**로 넘겨야 한다(명령행 인자가 프로파일 yml보다 우선한다).
 
-### 3.3 시나리오 A — "21:45 마감"을 3분 뒤에 재현하기
+### 3.3 시나리오 A — "22:15 마감"을 3분 뒤에 재현하기
 
 ```powershell
 # PowerShell — 창 B  (백엔드를 Ctrl+C 로 멈춘 뒤)
@@ -441,7 +442,7 @@ curl.exe -s -o NUL -w "%{http_code}`n" -X POST "http://localhost:8080/api/v1/reg
 > **한글이 필요하면 curl 을 쓰지 마라.** Windows 콘솔 인코딩 때문에 `400 VALIDATION_FAILED` 가 난다.
 > 위 예시가 `1A` / `Test User` 인 이유가 그것이다. 한글 검증은 브라우저나 `node scripts/integration-test.mjs` 로 한다([§8.4](#84-curl-로-한글을-보내면-400-validation_failed)).
 
-### 3.4 시나리오 B — "21:50 발송"을 2분 뒤에 재현하기
+### 3.4 시나리오 B — "22:25 발송"을 2분 뒤에 재현하기
 
 가장 확실한 방법은 **매 분 발송**으로 걸어 두는 것이다. 첫 분에 발송되고, 다음 분부터는 중복 방지가 동작하는지까지 한 번에 볼 수 있다.
 
@@ -660,7 +661,7 @@ docker compose stop mysql
 |---|---|---|
 | `POST /registrations` | **500** + `code:"INTERNAL_ERROR"`, 메시지 "일시적인 오류가 발생했습니다…" | `RegistrationService.register()` 의 중복 선행 조회(`findExisting`)에서 터진 `DataAccessException` 은 업무 예외가 아니므로 `GlobalExceptionHandler` 의 마지막 핸들러가 500 으로 변환한다. **사용자 응답 문구는 예전과 같다** |
 | Redis WAL | **해당 건이 `status:"PENDING"` 으로 남는다** | WAL append(3단계)가 중복 선행 조회(4단계)보다 **앞**에 있다. DB 접근 실패는 `FAILED` 로 덮어쓰지 않고 `PENDING` 그대로 둔다 — 그래야 대사가 "최초 INSERT 가 실패한 건"으로 보고 통계까지 재집계한다 |
-| 21:50 대사 | **DB 로 복구된다** | `ReconciliationService` 는 WAL 상태가 아니라 **DB 존재 여부**로 복구를 판단한다. 복구된 인원은 사감 명단·문자·메일에 정상 포함된다 |
+| 22:25 대사 | **DB 로 복구된다** | `ReconciliationService` 는 WAL 상태가 아니라 **DB 존재 여부**로 복구를 판단한다. 복구된 인원은 사감 명단·문자·메일에 정상 포함된다 |
 | 등록 통계 | 복구 시점에 **+1** | WAL 상태가 `COMMITTED` 가 아니므로 `countAsNewRegistration=true` — 최초 INSERT 가 실패해 아직 집계되지 않았던 건이다 |
 | `/actuator/health/alb` | **`DOWN` (HTTP 503)** | alb 그룹에 `db` 가 포함되어 있다. 운영에서는 ALB 가 이 인스턴스를 타깃에서 빼는 것이 의도된 동작 |
 | `GET /registrations/window` | **200 정상** | DB 를 쓰지 않는다(시계 계산만) |
@@ -684,7 +685,7 @@ docker compose start mysql
 docker compose ps                                # (healthy) 까지 대기
 curl.exe -s http://localhost:8080/actuator/health/alb        # UP 으로 돌아올 때까지(커넥션 풀 재생성에 몇 초)
 
-# 21:50 대사를 손으로 돌려 복구를 확인한다
+# 22:25 대사를 손으로 돌려 복구를 확인한다
 $K = @{ "X-Admin-Key" = "local-dev-admin-key" }
 Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/admin/notifications/dispatch?date=$D&force=true" -Headers $K
 docker exec imlate-mysql mysql -uimlate -pimlate -D imlate -e "SELECT class_name,student_name,room_number,wal_id FROM return_registration WHERE registration_date=CURDATE();"
@@ -940,7 +941,7 @@ $K = @{ "X-Admin-Key" = "local-dev-admin-key" }
 
 - [ ] `integration-test.mjs §1` — **시각 정합성 단언 전부 통과**
       (`opensAt < closesAt < 통금(22:30) < 복귀(23:30)`, 발송 cron 이 마감 뒤·통금 앞, 재시도가 발송 뒤)
-- [ ] `window` 응답의 `closesAt` 이 **21:45** 이고 `curfewTime` 22:30 · `returnTime` 23:30 은 그대로다
+- [ ] `window` 응답의 `closesAt` 이 **22:15** 이고 `curfewTime` 22:30 · `returnTime` 23:30 은 그대로다
 - [ ] 마감 시각을 앞당겨 **409 REGISTRATION_CLOSED** 를 눈으로 확인했다
 - [ ] 발송 cron 을 앞당겨 **스케줄러가 실제로 발화**하는 것을 로그로 확인했다
 - [ ] 같은 cron 이 두 번 발화했을 때 **ALREADY_SENT** 로 건너뛰는 것을 확인했다
@@ -987,7 +988,7 @@ $K = @{ "X-Admin-Key" = "local-dev-admin-key" }
 ### 6.6 배포 직후 (참고)
 
 - [ ] [docs/DEPLOYMENT.md](DEPLOYMENT.md) §5 "배포 후 확인" 절차 수행
-- [ ] [docs/OPERATIONS.md](OPERATIONS.md) §1 일일 운영 체크리스트로 첫날 21:45 마감 → 21:50 발송을 지켜본다
+- [ ] [docs/OPERATIONS.md](OPERATIONS.md) §1 일일 운영 체크리스트로 첫날 22:15 마감 → 22:25 발송을 지켜본다
 
 ---
 
@@ -1164,13 +1165,13 @@ docker exec imlate-mysql mysql -uimlate -pimlate -D imlate --default-character-s
 ### 8.5 등록 창 마감 이후에 통합 테스트를 돌렸다
 
 ```
-등록 창이 닫혀 있어 이후 시험을 진행할 수 없습니다(마감 21:45 이후).
+등록 창이 닫혀 있어 이후 시험을 진행할 수 없습니다(마감 22:15 이후).
 IMLATE_REGISTRATION_CLOSE_TIME=23:59 로 앱을 재기동한 뒤 다시 실행하세요.
 (종료 코드 2)
 ```
 
 괄호 안의 시각은 스크립트가 `window` 응답의 `closesAt` 을 그대로 읽어 찍은 것이다(하드코딩 아님).
-통합 테스트는 실제로 등록을 해야 하므로 **등록 창이 열려 있어야 한다**. 마감(기본 21:45) 이후에 작업 중이라면:
+통합 테스트는 실제로 등록을 해야 하므로 **등록 창이 열려 있어야 한다**. 마감(기본 22:15) 이후에 작업 중이라면:
 
 ```powershell
 # PowerShell — 창 B : 백엔드 Ctrl+C 후
@@ -1194,7 +1195,7 @@ export IMLATE_REGISTRATION_CLOSE_TIME=23:59
 > 건너뜀: 1-3. 시각 정합성(마감 → 발송 → 재시도 → 통금) — 등록 창이 23:59 까지 늘어나 있어 건너뜀. 기본 설정으로 재기동해 한 번은 확인할 것.
 > ```
 >
-> 시험용 설정을 결함으로 보고하지 않기 위한 장치다. **기본 설정(마감 21:45)으로 한 번은 반드시 돌려서
+> 시험용 설정을 결함으로 보고하지 않기 위한 장치다. **기본 설정(마감 22:15)으로 한 번은 반드시 돌려서
 > 이 항목이 통과하는 것을 확인한다.**
 
 참고로 **자정을 넘겨서** 테스트하면 `targetDate` 가 바뀌므로, 전날 데이터로 발송을 확인하려면 `?date=` 를 명시해야 한다.

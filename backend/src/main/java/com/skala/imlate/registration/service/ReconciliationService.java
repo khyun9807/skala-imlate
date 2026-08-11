@@ -26,7 +26,7 @@ import com.skala.imlate.registration.wal.WalStatus;
 /**
  * WAL ↔ DB 대사 서비스(R8, SPEC §5.4).
  *
- * <p>21:45 마감 후 사감 발송(21:50) 직전에 실행되어, Redis WAL 에는 있는데 DB 에는 없는 등록을 찾아
+ * <p>22:15 마감 후 사감 발송(22:25) 직전에 실행되어, Redis WAL 에는 있는데 DB 에는 없는 등록을 찾아
  * DB 로 복구한다. 조회 페이지는 복구 없이 {@link #inspect(LocalDate)} 만 호출한다.
  *
  * <p>WAL 항목의 {@code status}(PENDING/FAILED) 는 판정에 쓰지 않는다. <b>실제 DB 존재 여부</b>로만 판단한다.

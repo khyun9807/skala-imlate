@@ -537,7 +537,7 @@ resource "aws_lb_target_group_attachment" "app" {
 # 모니터링 / 알람 (CloudWatch → SNS → 운영자 메일)
 #
 #   운영 위험 평가에서 나온 1번 위험을 막는다.
-#   "EC2 1대 단일 AZ 구성인데 21:50 직전에 인스턴스가 죽으면 발송이 통째로 실패하고
+#   "EC2 1대 단일 AZ 구성인데 22:25 직전에 인스턴스가 죽으면 발송이 통째로 실패하고
 #    아무도 모른다." systemd Restart=always 는 프로세스 재시작만 커버한다.
 #
 #   ★ 수신 채널 분리

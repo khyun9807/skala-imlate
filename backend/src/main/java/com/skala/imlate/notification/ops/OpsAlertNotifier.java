@@ -285,7 +285,7 @@ public class OpsAlertNotifier {
             body.append("\n[문자 잔액]\n").append(balanceWarning).append('\n');
         }
 
-        body.append("\n실패한 채널은 22:05 / 22:20 에 자동으로 재시도됩니다"
+        body.append("\n실패한 채널은 22:35 / 22:45 에 자동으로 재시도됩니다"
                 + "(통금 22:30 이전). 재시도로도 복구되지 않으면 수동 발송이 필요합니다.\n");
         body.append("\n※ 이 메일은 운영자에게만 발송됩니다(사감 수신처와 분리되어 있습니다).\n");
         return body.toString();

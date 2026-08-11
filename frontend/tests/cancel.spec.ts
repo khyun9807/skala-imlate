@@ -14,6 +14,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 import {
+  CANCEL_CLOSE_TIME_LABEL,
   CANCEL_LOCKED_MESSAGE,
   CANCEL_REJECTED_MESSAGE,
   CLOSE_TIME_LABEL,
@@ -174,12 +175,42 @@ test.describe('마감 이후', () => {
     const mock = await openCancel(page, { window: 'closed' })
 
     await expect(page.getByText('취소 마감 이후 안내')).toBeVisible()
-    await expect(page.getByText(`${CLOSE_TIME_LABEL} 이후에는 취소할 수 없습니다.`)).toBeVisible()
+    // 등록 마감(22:15)이 아니라 취소 마감(22:20)을 말해야 한다.
+    // 두 시각이 달라진 뒤로 여기서 등록 마감을 쓰면 교육생이 5분을 잃는다.
+    await expect(
+      page.getByText(`${CANCEL_CLOSE_TIME_LABEL} 이후에는 취소할 수 없습니다.`),
+    ).toBeVisible()
     // 왜 안 되는지가 화면에 있어야 사감에게 전화가 가지 않는다.
     await expect(page.getByText('명단은 이미 사감 선생님께 전달되어 시스템에서 되돌릴 수 없습니다.')).toBeVisible()
 
     await expect(page.getByRole('button', { name: '취소 마감' })).toBeDisabled()
     expect(mock.cancelRequests).toHaveLength(0)
+  })
+
+  test('★ 등록 마감과 취소 마감 사이에는 등록은 막혀도 취소는 된다', async ({ page }) => {
+    // 22:17 — 이 5분을 위해 취소 마감을 따로 뒀다. 취소 화면이 등록 마감을 보면 여기서 깨진다.
+    const mock = await openCancel(page, { window: 'cancelOnly' })
+
+    await expect(page.getByText('취소 마감 이후 안내')).toBeHidden()
+    await expect(page.getByRole('button', { name: SUBMIT_BUTTON })).toBeEnabled()
+
+    await fillCancelForm(page)
+    await page.getByRole('button', { name: SUBMIT_BUTTON }).click()
+    await page.getByRole('button', { name: CONFIRM_BUTTON }).click()
+
+    await expect(page.getByText('취소되었습니다', { exact: false }).first()).toBeVisible()
+    expect(mock.cancelRequests).toHaveLength(1)
+  })
+
+  test('등록 마감이 지났으면 "다시 등록할 수 없다"고 알려 준다', async ({ page }) => {
+    // 취소는 됐지만 재등록은 불가능한 구간이다. 그 사실을 모르고 취소하면 명단에서 빠진 채 끝난다.
+    await openCancel(page, { window: 'cancelOnly' })
+
+    await expect(
+      page.getByText(`등록 마감(${CLOSE_TIME_LABEL})이 지난 뒤에도 잠시 취소는 됩니다.`, {
+        exact: false,
+      }),
+    ).toBeVisible()
   })
 })
 

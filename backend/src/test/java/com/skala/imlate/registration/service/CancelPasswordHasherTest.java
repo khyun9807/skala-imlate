@@ -90,7 +90,8 @@ class CancelPasswordHasherTest {
         ImlateProperties.Registration reg = base.registration();
         return new CancelPasswordHasher(new ImlateProperties(
                 base.timezone(),
-                new ImlateProperties.Registration(reg.openTime(), reg.closeTime(), reg.returnTime(),
+                new ImlateProperties.Registration(reg.openTime(), reg.closeTime(),
+                        reg.cancelCloseTime(), reg.returnTime(),
                         reg.curfewTime(), reg.maxNameLength(), reg.maxRoomLength(),
                         new ImlateProperties.Cancel(4, 10, iterations)),
                 base.wal(), base.lookup(), base.admin()));

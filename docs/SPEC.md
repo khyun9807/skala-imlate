@@ -10,14 +10,14 @@
 
 | # | 요구 | 구현 위치 |
 |---|---|---|
-| R1 | 기숙 이용 교육생이 **21:45까지** 웹에서 23:30 복귀 등록 | `registration` 모듈 + 프론트 `/` |
+| R1 | 기숙 이용 교육생이 **22:15까지** 웹에서 23:30 복귀 등록 | `registration` 모듈 + 프론트 `/` |
 | R2 | 등록 항목: **반 / 이름 / 기숙사 호수** | `ReturnRegistration` |
-| R3 | **21:50** 에 사감 2명에게 문자 + 이메일 발송, 0명이면 미발송 | `notification` 모듈 스케줄러 |
+| R3 | **22:25** 에 사감 2명에게 문자 + 이메일 발송, 0명이면 미발송 | `notification` 모듈 스케줄러 |
 | R4 | 목록에 반·이름·호수 포함, 보기 좋은 텍스트 | `CurfewNoticeRenderer` |
 | R5 | 미니멀 · 전 디바이스 반응형 · 검증까지 완료 | `frontend` + Playwright |
 | R6 | 이전 입력값 기억 → 자동 채움 | 프론트 localStorage |
 | R7 | Redis에 WAL 1회 → DB 1회 (누락 방지) | `registration.wal` |
-| R8 | 21:45 마감 후 Redis ↔ DB 대사(검증) → 조회 페이지 노출 | `ReconciliationService` + 프론트 `/lookup` |
+| R8 | 22:15 마감 후 Redis ↔ DB 대사(검증) → 조회 페이지 노출 | `ReconciliationService` + 프론트 `/lookup` |
 | R9 | 조회 페이지 주소 + 안내/통계 문구를 문자·이메일로 발송 | `notification` |
 | R10 | 설정 파일 분리(키/비번/AWS) | `application-*.yml` + `imlate.*` properties |
 | R11 | 문자=Aligo, 메일=Amazon SES | `sms.AligoSmsSender`, `email.SesEmailSender` |
@@ -93,16 +93,30 @@ skala-imlate/
 - 모든 시각은 **Asia/Seoul** 기준. 서버는 `Clock` 빈(`ClockConfig`)을 주입받아 사용한다.
   **`LocalDate.now()` / `LocalDateTime.now()` 를 인자 없이 호출하지 않는다.** 항상 `now(clock)`.
 - `registrationDate` = 등록 시점의 KST 날짜(= 그날 밤 복귀 대상일).
-- 등록 창: `[open-time(기본 00:00), close-time(기본 21:45))`. 21:45:00 이후 등록 거부.
-  **21:45 이후에는 그날 등록이 닫히고, 자정(00:00)에 다음 날 대상 등록이 열린다.**
-- 사감 발송: `close-time + 5분` = 21:50 (cron 설정값 `0 50 21 * * *`).
-- 실패 채널 재시도: 발송 +15분 / +30분 = 22:05, 22:20 (cron 설정값 `0 5,20 22 * * *`).
+- 등록 창: `[open-time(기본 00:00), close-time(기본 22:15))`. 22:15:00 이후 등록 거부.
+  **22:15 이후에는 그날 등록이 닫히고, 자정(00:00)에 다음 날 대상 등록이 열린다.**
+- 취소 창: `[open-time, cancel-close-time(기본 22:20))`. **등록 창보다 5분 넓다.**
+  마감 직전에 등록하고 곧바로 마음이 바뀐 사람에게 되돌릴 틈을 주기 위해서다.
+  그 5분(22:15~22:20) 동안 새 등록은 거부되고 취소만 받는다.
+  설정이 등록 마감보다 이르면 등록 마감까지 끌어올린다(취소 창이 등록 창보다 좁아지지 않는다).
+- 사감 발송: `cancel-close-time + 5분` = 22:25 (cron 설정값 `0 25 22 * * *`).
+  **등록 마감이 아니라 취소 마감 기준이다** — 등록 마감 기준으로 잡으면
+  22:15~22:20 사이 취소가 반영되지 못한 채 명단이 나간다.
+- 실패 채널 재시도: 발송 +10분 / +20분 = 22:35, 22:45 (cron 설정값 `0 35,45 22 * * *`).
 - 원래 통금 22:30, 연장 통금 23:30 (안내 문구용 값).
-- 하루 타임라인: `00:00 등록 시작 → 21:45 마감 → 21:50 발송 → (22:05·22:20 재시도) → 22:30 문 잠김 → 23:30 일괄 개방`
+- 하루 타임라인: `00:00 등록 시작 → 22:15 등록 마감 → 22:20 취소 마감 → 22:25 발송 → 22:30 문 잠김 → (22:35·22:45 재시도) → 23:30 일괄 개방`
 
-> **변경 이력 —** 원 요구(`request.md`)는 **마감 22:00 / 발송 22:10** 이었으나,
-> 운영자 요청으로 **마감 21:45 / 발송 21:50** 으로 조정했다(재시도도 22:25·22:40 → 22:05·22:20 으로 함께 앞당김).
-> 통금 22:30, 일괄 복귀 23:30, 등록 시작 00:00 은 **바뀌지 않았다.**
+**불변식:** `close-time ≤ cancel-close-time < dispatch-cron < return-time`.
+마감 시각을 옮길 때는 발송·재시도 cron 도 반드시 함께 옮긴다.
+통합 시험(`scripts/integration-test.mjs` §1-3)이 이 순서를 단언한다.
+
+> **변경 이력 —** 원 요구(`request.md`)는 **마감 22:00 / 발송 22:10 / 재시도 22:25·22:40** 이었다.
+> 1차(운영자 요청): **마감 21:45 / 발송 21:50 / 재시도 22:05·22:20** 으로 앞당김.
+> 2차(운영자 요청): **마감 22:15 / 취소 마감 22:20 / 발송 22:25 / 재시도 22:35·22:45** 로 늦추고,
+> 이때 **취소 마감을 등록 마감과 분리**했다.
+> 2차에서 재시도가 통금(22:30) 이후로 넘어갔다 — 등록을 22:15 까지 받으면 통금 전에 재시도 두 번을
+> 넣을 자리가 없다. 사감이 명단을 실제로 쓰는 시점이 일괄 개방(23:30)이라 성립하는 타협이다.
+> 통금 22:30, 일괄 복귀 23:30, 등록 시작 00:00 은 **한 번도 바뀌지 않았다.**
 > `request.md` 는 원본 요구사항 기록이므로 그대로 둔다.
 
 **위 시각은 전부 설정값이다. 코드에 하드코딩하지 않는다** — 바꾸는 것은 아래 기본값뿐이다.
@@ -110,9 +124,9 @@ skala-imlate/
 | 프로퍼티 | 기본값 | 비고 |
 |---|---|---|
 | `imlate.registration.open-time` | `00:00` | 환경변수 없음(yml 직접 수정) |
-| `imlate.registration.close-time` | `21:45` | `IMLATE_REGISTRATION_CLOSE_TIME` |
-| `imlate.notification.dispatch-cron` | `0 50 21 * * *` | `IMLATE_NOTIFICATION_DISPATCH_CRON` |
-| `imlate.notification.retry-cron` | `0 5,20 22 * * *` | `IMLATE_NOTIFICATION_RETRY_CRON` |
+| `imlate.registration.close-time` | `22:15` | `IMLATE_REGISTRATION_CLOSE_TIME` |
+| `imlate.notification.dispatch-cron` | `0 25 22 * * *` | `IMLATE_NOTIFICATION_DISPATCH_CRON` |
+| `imlate.notification.retry-cron` | `0 35,45 22 * * *` | `IMLATE_NOTIFICATION_RETRY_CRON` |
 | `imlate.registration.curfew-time` | `22:30` | 안내 문구용 — **변경 없음** |
 | `imlate.registration.return-time` | `23:30` | 안내 문구용 — **변경 없음** |
 
@@ -149,8 +163,8 @@ public record ImlateProperties(
 @ConfigurationProperties(prefix = "imlate.notification")
 public record NotificationProperties(
         boolean enabled,
-        String dispatchCron,          // "0 50 21 * * *"  (마감 21:45 + 5분)
-        String retryCron,             // "0 5,20 22 * * *" (발송 +15분 / +30분)
+        String dispatchCron,          // "0 25 22 * * *"  (마감 22:15 + 5분)
+        String retryCron,             // "0 35,45 22 * * *" (발송 +10분 / +20분)
         int maxAttempts,              // 3
         long lockTtlSeconds,          // 300
         String contactName,           // "SKALA 운영진"      — 문자/메일 문의처 안내용
@@ -222,7 +236,7 @@ public class GlobalExceptionHandler { /* ApiException, MethodArgumentNotValidExc
 
 응답 바디 예:
 ```json
-{ "code":"REGISTRATION_CLOSED", "message":"등록 마감 시간(21:45)이 지났습니다.",
+{ "code":"REGISTRATION_CLOSED", "message":"등록 마감 시간(22:15)이 지났습니다.",
   "path":"/api/v1/registrations", "timestamp":"2026-08-05T21:48:11+09:00", "errors":[] }
 ```
 
@@ -368,7 +382,7 @@ public class RegistrationWalRepository {
    그 밖의 실패 → `updateStatus(FAILED)` 후 예외 전파
 
 > **왜 중복 선행 조회를 WAL append 뒤로 옮겼는가** — 선행 조회가 앞에 있으면 MySQL 이 완전히 죽었을 때
-> WAL 기록에 도달하기도 전에 500 이 나서 Redis 에 아무 흔적도 남지 않고, 21:50 대사로도 복구할 수 없다.
+> WAL 기록에 도달하기도 전에 500 이 나서 Redis 에 아무 흔적도 남지 않고, 22:25 대사로도 복구할 수 없다.
 > 기숙사 도메인에서 "명단 누락 = 교육생이 밖에서 밤을 샌다" 이므로, **DB 장애 중의 등록 의도도 WAL 에 남겨
 > 대사에서 복구되게** 한다(4단계 DB 장애 시 `FAILED` 가 아니라 `PENDING` 으로 두는 이유도 같다 —
 > `PENDING` 이어야 §5.4 의 통계 재집계 판정 `entry.status() != COMMITTED` 가 성립한다).
@@ -476,7 +490,7 @@ DB에만 있는 항목이 남으면 → `MISMATCH`(WAL TTL 만료 가능성이�
 
 `GET /api/v1/lookup?date=2026-08-05&token=…` → **사감용 조회 페이지 데이터**
 ```json
-{ "date":"2026-08-05", "generatedAt":"2026-08-05T21:50:00+09:00", "totalCount":12,
+{ "date":"2026-08-05", "generatedAt":"2026-08-05T22:25:00+09:00", "totalCount":12,
   "returnTime":"23:30", "curfewTime":"22:30",
   "items":[{"no":1,"className":"1반","studentName":"홍길동","roomNumber":"302",
             "registeredAt":"2026-08-05T21:03:11"}],
@@ -502,7 +516,7 @@ DB에만 있는 항목이 남으면 → `MISMATCH`(WAL TTL 만료 가능성이�
 
 | 결정 | 내용 | 근거 |
 |---|---|---|
-| 소프트 삭제 | `cancelled_at` 만 채우고 행은 남긴다 | 행을 지우면 WAL 기록이 남아 **21:50 대사가 취소분을 되살린다** |
+| 소프트 삭제 | `cancelled_at` 만 채우고 행은 남긴다 | 행을 지우면 WAL 기록이 남아 **22:25 대사가 취소분을 되살린다** |
 | 대사에서 제외 | 취소한 사람을 DB·WAL **양쪽에서** 뺀다 | 한쪽만 빼면 되살아나거나 가짜 불일치가 뜬다 |
 | 되살리기 | 취소 후 재등록은 INSERT 가 아니라 기존 행 복구 | 유니크 제약이 취소된 행에도 걸려 있어 새 행을 못 만든다 |
 | 비밀번호 저장 | PBKDF2 + **서버 시크릿 pepper** | 4자리는 1만 가지뿐 — 해시만으로는 DB 유출 시 즉시 뚫린다 |
@@ -753,7 +767,7 @@ public interface DailyStatRepository extends JpaRepository<DailyStat, LocalDate>
 }
 ```
 `StatsSnapshotScheduler` : `imlate.stats.snapshot-cron`(기본 `0 5 0 * * *`) 에 전날 Redis 값을 `daily_stat` 로 영속화.
-추가로 21:50 발송 직후 상태를 반영하기 위해 `0 55 23 * * *` 에 당일분도 upsert.
+추가로 22:25 발송 직후 상태를 반영하기 위해 `0 55 23 * * *` 에 당일분도 upsert.
 
 ### 7.3 API
 
@@ -773,7 +787,7 @@ GET /api/v1/stats/daily?from=&to=&token=                   → List<DailyStatVie
 교육생 약 200명은 **기숙사 공용 와이파이**로 등록한다. NAT 뒤라 **전원이 공인 IP 하나를 공유**한다.
 그런데 초기 구현은 버킷을 `imlate:rl:{scope}:{clientIp}` 로만 만들고 등록 한도를 **IP당 8회/분**으로 두었다.
 
-> 결과: 같은 와이파이에서 **9번째 학생부터 429**. 마감(21:45) 직전 몰리는 시간대에
+> 결과: 같은 와이파이에서 **9번째 학생부터 429**. 마감(22:15) 직전 몰리는 시간대에
 > 정확히 최악의 타이밍으로 정상 사용자가 차단된다. **운영이 불가능한 결함이었다.**
 
 부하 테스트가 이걸 잡지 못한 이유도 함께 기록해 둔다 — 요청마다 다른 `X-Forwarded-For` 를 붙여
@@ -842,7 +856,7 @@ bucketKey  = "imlate:rl:register-person:" + personHash
   더 강한 보장이 필요해지면 `imlate.lookup.token-secret` 을 키로 쓰는 HMAC-SHA256 으로 바꾼다
   (키 포맷만 바뀌고 로직은 그대로다).
 - 개인 버킷 차단은 **WAL append(§5.2 3단계)보다 반드시 앞에서** 일어나야 한다.
-  차단된 요청이 WAL 에 남으면 21:50 대사가 유령 인원을 DB 로 복구한다.
+  차단된 요청이 WAL 에 남으면 22:25 대사가 유령 인원을 DB 로 복구한다.
 - 본문에서 개인 키를 못 만들면(본문 없음·JSON 파손·필드 누락) **개인 버킷 검사를 건너뛴다.**
   리미터가 정상 등록을 막는 것보다 낫고, 잘못된 본문은 어차피 컨트롤러 `@Valid` 에서 400 이 된다.
 

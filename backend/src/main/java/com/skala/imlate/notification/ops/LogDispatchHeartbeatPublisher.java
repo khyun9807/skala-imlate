@@ -15,7 +15,7 @@ import com.skala.imlate.common.properties.NotificationProperties;
  * build.gradle 은 이 작업의 소유 파일이 아니므로 임의로 의존성을 추가하지 않는다. 대신 운영 EC2 에
  * 이미 CloudWatch Agent 가 설치되어 애플리케이션 stdout({@code imlate.log})을 로그 그룹
  * {@code /imlate/app} 으로 보내고 있으므로, <b>로그 지표 필터(metric filter)</b> 로 동일한 지표를
- * 만들 수 있다. 즉 의존성 추가 없이 "21:50 에 아무 일도 없었다"를 밖에서 감지할 수 있다.
+ * 만들 수 있다. 즉 의존성 추가 없이 "22:25 에 아무 일도 없었다"를 밖에서 감지할 수 있다.
  *
  * <p><b>인프라 쪽 연결(로그 그룹 {@code /imlate/app} 의 지표 필터)</b>
  * <pre>

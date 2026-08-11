@@ -146,11 +146,11 @@ async function envNumber(...names) {
 
 // ── 시각 헬퍼 ────────────────────────────────────────────────────────────────
 //
-// 마감·발송 시각은 **전부 설정값**이고 운영자 요청으로 언제든 앞당겨질 수 있다
-// (실제로 22:00/22:10 → 21:45/21:50 으로 앞당겨졌다).
+// 마감·발송 시각은 **전부 설정값**이고 운영자 요청으로 언제든 옮겨질 수 있다
+// (실제로 22:00/22:10 → 21:45/21:50 → 22:15/22:25 으로 두 번 옮겨졌다).
 // 그래서 이 스크립트는 시각을 하드코딩하지 않고, 응답·설정에서 읽어 **관계**만 단언한다.
 
-/** "21:45" · "21:45:00" · "2026-08-05T21:45:00+09:00" 에서 하루 중 분(minute of day)을 뽑는다. */
+/** "22:15" · "22:15:00" · "2026-08-05T22:15:00+09:00" 에서 하루 중 분(minute of day)을 뽑는다. */
 const timeToMinutes = (value) => {
   const m = /(?:^|T)(\d{1,2}):(\d{2})/.exec(String(value ?? ''))
   return m ? Number(m[1]) * 60 + Number(m[2]) : null
@@ -164,8 +164,8 @@ const hhmm = (min) =>
 
 /**
  * 6필드 cron("초 분 시 일 월 요일")의 발화 시각을 분 단위 배열로 돌려준다.
- *   "0 50 21 * * *"   → [21*60+50]
- *   "0 5,20 22 * * *" → [22*60+5, 22*60+20]
+ *   "0 25 22 * * *"   → [22*60+25]
+ *   "0 35,45 22 * * *" → [22*60+35, 22*60+45]
  * 와일드카드나 스텝이 섞인 시험용 cron(예: 매 분 발화)이면 null 을 돌려 단언을 건너뛴다.
  */
 const cronToMinutes = (cron) => {
@@ -347,19 +347,29 @@ async function run() {
 
   // 1-1) 하루 타임라인의 **순서**를 단언한다. 시각 값 자체는 설정이므로 하드코딩하지 않는다.
   //      계약은 "00:00 등록 시작 → 마감 → 사감 발송 → (재시도) → 통금 22:30 → 일괄 개방 23:30" 이다.
-  //      운영자 요청으로 마감/발송만 앞당겨졌고(22:00/22:10 → 21:45/21:50),
+  //      운영자 요청으로 마감/발송만 옮겨졌고(22:00/22:10 → 21:45/21:50 → 22:15/22:25),
   //      통금·복귀는 그대로다. 그래서 값이 아니라 순서를 지킨다.
   const opensAtMin = timeToMinutes(win?.opensAt)
   const closesAtMin = timeToMinutes(win?.closesAt)
+  const cancelClosesMin = timeToMinutes(win?.cancelClosesAt)
   const curfewMin = timeToMinutes(win?.curfewTime)
   const returnMin = timeToMinutes(win?.returnTime)
   info(`대상일 = ${TODAY} · 등록 창 ${hhmm(opensAtMin)} ~ ${hhmm(closesAtMin)}`
+    + ` · 취소 마감 ${hhmm(cancelClosesMin)}`
     + ` · 통금 ${hhmm(curfewMin)} · 일괄 복귀 ${hhmm(returnMin)}`)
 
   check('등록 시작 < 등록 마감', opensAtMin !== null && closesAtMin !== null && opensAtMin < closesAtMin,
     `opensAt=${hhmm(opensAtMin)} closesAt=${hhmm(closesAtMin)}`)
   check('통금 < 일괄 복귀', curfewMin !== null && returnMin !== null && curfewMin < returnMin,
     `curfew=${hhmm(curfewMin)} return=${hhmm(returnMin)}`)
+
+  // 취소 창은 등록 창보다 좁으면 안 된다 — 좁으면 "등록은 됐는데 되돌릴 수 없는" 구간이 생긴다.
+  check('취소 마감 응답이 내려옴', cancelClosesMin !== null, `cancelClosesAt=${win?.cancelClosesAt}`)
+  check(`등록 마감(${hhmm(closesAtMin)}) ≤ 취소 마감(${hhmm(cancelClosesMin)})`,
+    cancelClosesMin !== null && closesAtMin !== null && cancelClosesMin >= closesAtMin,
+    '취소가 등록보다 먼저 닫히면 잘못 등록한 사람이 되돌릴 방법을 잃는다.')
+  check('취소 가능 여부(cancelOpen)가 내려옴', typeof win?.cancelOpen === 'boolean',
+    `cancelOpen=${win?.cancelOpen} — 취소 화면이 이 값으로 마감을 판정한다.`)
 
   // 1-2) 마감 시각이 **설정값 그대로** 응답에 반영되는지(= 어딘가에 하드코딩되지 않았는지).
   const closeTimeProp = await envValue('imlate.registration.close-time')
@@ -400,11 +410,24 @@ async function run() {
       '마감 전에 보내면 마감 직전 등록분이 명단에서 빠진다.')
     check(`사감 발송은 통금(${hhmm(curfewMin)}) 이전`, Math.max(...dispatchMins) < curfewMin,
       '문이 잠긴 뒤에 명단을 받으면 사감님이 쓸 수 없다.')
+
+    // ★ 이번 변경(등록 22:15 / 취소 22:20)에서 가장 중요한 불변식이다.
+    //   발송이 취소 마감보다 앞서면, 마감 직전에 취소한 사람이 사감 명단에 그대로 남는다.
+    if (cancelClosesMin !== null) {
+      check(`사감 발송(${dispatchMins.map(hhmm).join(',')})은 취소 마감(${hhmm(cancelClosesMin)}) 이후`,
+        Math.min(...dispatchMins) > cancelClosesMin,
+        '취소 마감 전에 보내면 마감 직전 취소분이 명단에 남는다.')
+    }
+
     if (retryMins?.length) {
       check('실패 채널 재시도는 최초 발송 이후', Math.min(...retryMins) > Math.max(...dispatchMins),
         `retry=${retryMins.map(hhmm).join(',')} dispatch=${dispatchMins.map(hhmm).join(',')}`)
-      check(`실패 채널 재시도가 통금(${hhmm(curfewMin)}) 전에 모두 끝남`, Math.max(...retryMins) < curfewMin,
-        `retry=${retryMins.map(hhmm).join(',')}`)
+      // 재시도 기준선은 통금이 아니라 **일괄 개방**이다.
+      //   등록을 22:15 까지 받기로 하면서 통금(22:30) 전에 재시도 두 번을 넣을 자리가 사라졌다.
+      //   사감이 명단을 실제로 쓰는 시점은 일괄 개방(23:30)이므로 그 전에만 끝나면 성립한다.
+      check(`실패 채널 재시도가 일괄 개방(${hhmm(returnMin)}) 전에 모두 끝남`,
+        Math.max(...retryMins) < returnMin,
+        `retry=${retryMins.map(hhmm).join(',')} — 복귀 시점까지 명단이 도착하지 못한다.`)
     }
   }
 
@@ -1002,7 +1025,7 @@ async function run() {
     // ★ 이번 변경의 핵심 증거 ★
     // WAL append 가 중복 선행 조회(DB READ)보다 앞에 있으므로, DB 가 완전히 죽어 500 이 나더라도
     // "이 사람이 등록하려 했다"는 사실은 Redis WAL 에 PENDING 으로 남는다.
-    // 예전 순서(선행 조회 → WAL)에서는 여기서 아무 흔적도 남지 않아 21:50 대사로도 복구할 수 없었다.
+    // 예전 순서(선행 조회 → WAL)에서는 여기서 아무 흔적도 남지 않아 22:25 대사로도 복구할 수 없었다.
     const walDuringDbOutage = walEntries(TODAY)
     const pendingDown = walDuringDbOutage.find(
       (e) => e.studentName === DOWN_NAME && e.roomNumber === DOWN_ROOM)
@@ -1049,7 +1072,7 @@ async function run() {
     check('장애 중 등록분은 아직 DB 에 없다 (WAL 에만 존재)',
       Number(mysql(`SELECT COUNT(*) FROM return_registration WHERE student_name='${DOWN_NAME}'`)) === 0)
 
-    // 21:50 대사가 WAL PENDING 을 주워 DB 로 복구해야 한다.
+    // 22:25 대사가 WAL PENDING 을 주워 DB 로 복구해야 한다.
     const dbRecovered = await admin(`/admin/notifications/dispatch?date=${TODAY}&force=true`)
     check('대사 포함 발송 200', dbRecovered.status === 200,
       `status=${dbRecovered.status} ${dbRecovered.text.slice(0, 160)}`)
@@ -1081,7 +1104,7 @@ async function run() {
     check('PENDING 복구는 등록 통계에 1 증가로 반영됨', statsAfterDown === statsBeforeDown + 1,
       `before=${statsBeforeDown} after=${statsAfterDown}`)
 
-    info('※ DB 가 완전히 죽어도 등록 의도가 WAL 에 남아 21:50 대사에서 복구됩니다.')
+    info('※ DB 가 완전히 죽어도 등록 의도가 WAL 에 남아 22:25 대사에서 복구됩니다.')
     info('   사용자에게는 여전히 500 이 나가므로 재시도를 안내하지만, 재시도해도 personKey 멱등이라 중복 행은 생기지 않습니다.')
   } else {
     skipped.push('14·15. 장애 훈련 — Redis / MySQL 정지 (--drills 로 실행)')

@@ -23,7 +23,7 @@ interface Props {
   state: WindowState
   /** 마감까지 남은 초 */
   seconds: number
-  /** 마감 시각 라벨 `21:45`. 서버 값이 없으면 빈 문자열 */
+  /** 마감 시각 라벨 `22:15`. 서버 값이 없으면 빈 문자열 */
   closeTime: string
   /** 다음 등록이 열리는 시각 라벨 `내일 00:00`. 서버 값이 없으면 빈 문자열 */
   nextOpenLabel?: string

@@ -9,7 +9,7 @@ public enum ErrorCode {
 
     /** 요청 값 검증 실패. */
     VALIDATION_FAILED(HttpStatus.BAD_REQUEST),
-    /** 등록 마감 시각(21:45) 이후 요청. */
+    /** 등록 마감 시각(22:15) 이후 요청. */
     REGISTRATION_CLOSED(HttpStatus.CONFLICT),
     /** 등록 시작 시각 이전 요청. */
     REGISTRATION_NOT_OPEN(HttpStatus.CONFLICT),

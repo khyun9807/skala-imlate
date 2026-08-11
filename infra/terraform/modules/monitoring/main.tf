@@ -4,14 +4,18 @@
 #   이 도메인에서 "조용한 실패"는 곧 교육생이 기숙사에 못 들어가는 사고다.
 #   운영 타임라인은 이렇게 흐른다.
 #
-#     00:00 등록 시작 → 21:45 마감 → 21:50 사감 발송
-#       → 22:05 / 22:20 실패분 재시도 → 22:30 문 잠김 → 23:30 일괄 개방
+#     00:00 등록 시작 → 22:15 등록 마감 → 22:20 취소 마감 → 22:25 사감 발송
+#       → 22:30 문 잠김 → 22:35 / 22:45 실패분 재시도 → 23:30 일괄 개방
+#
+#   ※ 재시도가 문 잠김(22:30) 뒤로 넘어간다. 사감이 명단을 실제로 쓰는 시점은
+#     일괄 개방(23:30)이라 기능은 성립하지만, 감시 목표는 여전히 "22:30 전 인지"다 —
+#     그래야 재시도가 다 실패해도 사람이 손으로 복구할 시간이 남는다.
 #
 #   그러므로 감시의 목표는 하나다. **22:30 전에 사람이 알아채는 것.**
 #   여기서 만드는 알람은 그 목표에 직접 기여하는 것만 남겼다.
 #
 #     1) 앱 서버가 죽었다            → EC2 StatusCheckFailed
-#     2) 21:50 발송 배치가 안 돌았다  → Imlate/DispatchCompleted 하트비트 누락  ★ 핵심
+#     2) 22:25 발송 배치가 안 돌았다  → Imlate/DispatchCompleted 하트비트 누락  ★ 핵심
 #     3) 발송이 부분 실패했다        → Imlate/DispatchFailures > 0
 #     4) 곧 죽을 것 같다             → RDS 스토리지/CPU, Redis 메모리, EC2 디스크
 #
@@ -104,7 +108,7 @@ resource "aws_sns_topic_subscription" "alert_email" {
 # =====================================================================
 # 1) EC2 인스턴스 장애
 #
-#   EC2 1대 단일 AZ 구성이다. 21:50 직전에 이 인스턴스가 죽으면 발송이 통째로 날아간다.
+#   EC2 1대 단일 AZ 구성이다. 22:25 직전에 이 인스턴스가 죽으면 발송이 통째로 날아간다.
 #   systemd Restart=always 는 **프로세스** 재시작만 커버한다 — 커널 패닉, 하드웨어 장애,
 #   네트워크 단절, 인스턴스 종료는 커버하지 못한다. 그 구멍을 여기서 막는다.
 #
@@ -121,7 +125,7 @@ resource "aws_cloudwatch_metric_alarm" "ec2_status_check" {
   alarm_name = "${var.name_prefix}-ec2-status-check-failed"
   alarm_description = join(" ", [
     "앱 EC2 상태 검사 실패(또는 인스턴스 소실).",
-    "발송 배치가 이 인스턴스 하나에 올라가 있으므로 21:50 전에는 즉시 조치해야 한다.",
+    "발송 배치가 이 인스턴스 하나에 올라가 있으므로 22:25 전에는 즉시 조치해야 한다.",
     "확인: aws ec2 describe-instance-status --instance-ids ${var.ec2_instance_id}",
   ])
 
@@ -134,7 +138,7 @@ resource "aws_cloudwatch_metric_alarm" "ec2_status_check" {
   }
 
   # 1분 주기로 2회 연속 실패해야 알람 — 순간적인 지표 튐으로 인한 오탐을 막으면서도
-  # 2분이면 21:50 발송까지 손 쓸 시간이 충분하다.
+  # 2분이면 22:25 발송까지 손 쓸 시간이 충분하다.
   period              = 60
   evaluation_periods  = 2
   datapoints_to_alarm = 2
@@ -155,7 +159,7 @@ resource "aws_cloudwatch_metric_alarm" "ec2_status_check" {
 # =====================================================================
 # 2) 발송 하트비트 누락  ★ 이 모듈에서 가장 중요한 알람
 #
-#   앱은 21:50 발송 배치가 끝나면 Imlate/DispatchCompleted 를 1회 올린다(값 1 이상).
+#   앱은 22:25 발송 배치가 끝나면 Imlate/DispatchCompleted 를 1회 올린다(값 1 이상).
 #   이 알람은 "그 하트비트가 오지 않았다"를 잡는다.
 #
 #   ─────────────────────────────────────────────────────────────────
@@ -165,7 +169,7 @@ resource "aws_cloudwatch_metric_alarm" "ec2_status_check" {
 #   하루 23시간 55분 동안 데이터가 없으므로 알람은 **거의 항상 ALARM** 이다.
 #   그런데 CloudWatch 는 상태가 **바뀔 때만** SNS 에 알린다.
 #
-#     → 발송이 성공한 날: 21:50 에 ALARM→OK, 21:55 에 OK→ALARM. 매일 알림 2통. 소음.
+#     → 발송이 성공한 날: 22:25 에 ALARM→OK, 22:30 에 OK→ALARM. 매일 알림 2통. 소음.
 #     → 발송이 실패한 날: 이미 ALARM 이라 **상태 변화가 없다 → 알림이 오지 않는다.**
 #
 #   즉 순진하게 만들면 "실패한 날에만 조용한" 알람이 된다. 없는 것보다 나쁘다.
@@ -184,11 +188,11 @@ resource "aws_cloudwatch_metric_alarm" "ec2_status_check" {
 #     하나도 없어야 288/288 위반 → **ALARM**.
 #
 #   시간축으로 따라가 보면:
-#     어제 21:50 의 하트비트는 [21:50, 21:55) 구간에 들어간다.
-#     이 구간은 오늘 21:55 에 24시간 창 밖으로 밀려난다.
-#       · 오늘 21:50 발송 성공 → 밀려나기 5분 전에 오늘 것이 들어온다 → OK 유지, 알림 없음
+#     어제 22:25 의 하트비트는 [22:25, 22:30) 구간에 들어간다.
+#     이 구간은 오늘 22:30 에 24시간 창 밖으로 밀려난다.
+#       · 오늘 22:25 발송 성공 → 밀려나기 5분 전에 오늘 것이 들어온다 → OK 유지, 알림 없음
 #       · 오늘 발송이 안 돎    → 창이 완전히 비는 순간 ALARM 전이
-#                                → **21:55~22:10 KST 사이에 메일** (통금 22:30 까지 20분 이상 여유)
+#                                → **22:30~22:10 KST 사이에 메일** (통금 22:30 까지 20분 이상 여유)
 #
 #   ─────────────────────────────────────────────────────────────────
 #   왜 period=300 / evaluation_periods=288 인가 (숫자의 근거)
@@ -207,13 +211,13 @@ resource "aws_cloudwatch_metric_alarm" "ec2_status_check" {
 #   ─────────────────────────────────────────────────────────────────
 #   한계 — 이 알람이 못 하는 것 (알고 쓰라고 적어 둔다)
 #   ─────────────────────────────────────────────────────────────────
-#   (a) 판정 시각이 "어제 하트비트가 찍힌 시각 + 5분"에 종속된다. 앱이 21:50 에 꾸준히
-#       올리면 매일 21:55 전후로 판정된다. 어제 발송이 22:05 재시도에서야 성공했다면
+#   (a) 판정 시각이 "어제 하트비트가 찍힌 시각 + 5분"에 종속된다. 앱이 22:25 에 꾸준히
+#       올리면 매일 22:30 전후로 판정된다. 어제 발송이 22:35 재시도에서야 성공했다면
 #       오늘 판정도 22:10 으로 밀린다. 22:15 를 넘겨 성공한 날이 있으면 다음 날 판정이
 #       22:30 을 넘길 수 있다 — 그런 날은 어차피 사람이 이미 붙어 있는 날이다.
-#   (b) 판정이 22:05 / 22:20 재시도보다 이르다. 이건 의도한 것이다. DispatchCompleted 는
-#       "21:50 배치가 돌기는 했는가"의 하트비트이지 "전원에게 도착했는가"가 아니다
-#       (후자는 아래 DispatchFailures 알람이 본다). 21:55 에 하트비트가 없다 =
+#   (b) 판정이 22:35 / 22:45 재시도보다 이르다. 이건 의도한 것이다. DispatchCompleted 는
+#       "22:25 배치가 돌기는 했는가"의 하트비트이지 "전원에게 도착했는가"가 아니다
+#       (후자는 아래 DispatchFailures 알람이 본다). 22:30 에 하트비트가 없다 =
 #       배치 자체가 안 돌았다 = 재시도를 기다릴 게 아니라 지금 손을 써야 한다.
 #   (c) 이틀 연속 실패하면 이미 ALARM 이라 둘째 날에는 새 메일이 오지 않는다.
 #       CloudWatch 알람의 공통 제약이다. 알람이 ALARM 에 머물러 있는 것 자체가 신호이므로
@@ -229,7 +233,7 @@ resource "aws_cloudwatch_metric_alarm" "dispatch_heartbeat_missing" {
   alarm_name = "${var.name_prefix}-dispatch-heartbeat-missing"
   alarm_description = join(" ", [
     "최근 24시간 동안 ${var.dispatch_metric_namespace}/${var.dispatch_completed_metric_name} 하트비트가 한 번도 없다.",
-    "21:50 사감 발송 배치가 돌지 않았을 가능성이 크다. 22:30 문 잠김 전에 확인할 것.",
+    "22:25 사감 발송 배치가 돌지 않았을 가능성이 크다. 22:30 문 잠김 전에 확인할 것.",
     "1) 앱 살아 있는지: curl -fsS https://skala-imlate.link/actuator/health",
     "2) 발송 이력: 관리 API 의 notification_dispatch 조회",
     "3) 필요하면 관리 API 로 수동 발송 트리거.",
@@ -280,7 +284,7 @@ resource "aws_cloudwatch_metric_alarm" "dispatch_failures" {
     "사감 발송 실패가 발생했다(${var.dispatch_metric_namespace}/${var.dispatch_failures_metric_name} > 0).",
     "과거 원인 1순위는 알리고 발신 IP 화이트리스트 누락, 2순위는 SES 아이덴티티 미검증이다.",
     "터미널: terraform output -raw aligo_whitelist_ip 로 현재 발신 IP 를 확인해 알리고에 등록되어 있는지 대조.",
-    "22:05 / 22:20 자동 재시도가 남아 있으므로 그 전에 원인을 제거하면 복구된다.",
+    "22:35 / 22:45 자동 재시도가 남아 있으므로 그 전에 원인을 제거하면 복구된다.",
   ])
 
   namespace   = var.dispatch_metric_namespace
@@ -288,7 +292,7 @@ resource "aws_cloudwatch_metric_alarm" "dispatch_failures" {
   statistic   = "Sum"
   dimensions  = var.dispatch_metric_dimensions
 
-  # 5분 1회. 21:50 실패를 22:05 재시도 전에 알 수 있어야 의미가 있다.
+  # 5분 1회. 22:25 실패를 22:35 재시도 전에 알 수 있어야 의미가 있다.
   period              = 300
   evaluation_periods  = 1
   datapoints_to_alarm = 1
@@ -313,7 +317,7 @@ resource "aws_cloudwatch_metric_alarm" "dispatch_failures" {
 #   지금 없는 것들과 그 이유:
 #     · RDS 연결 수 / 읽기 지연  → 200명 규모에서 임계값을 정할 근거가 없다. 먼저 관측부터.
 #     · EC2 CPU                  → t3.small 은 크레딧 기반이라 CPU 100% 자체가 사고가 아니다.
-#                                  진짜 신호는 CPUCreditBalance 인데, 이 앱은 21:50 몇 초를
+#                                  진짜 신호는 CPUCreditBalance 인데, 이 앱은 22:25 몇 초를
 #                                  빼면 사실상 유휴라 크레딧이 마를 일이 없다.
 #     · 메모리                    → JVM 이 -Xmx1024m 로 고정되어 있고 OOM 이면 systemd 가
 #                                  재시작한다. 그 재시작이 발송을 놓치는지는 하트비트가 잡는다.
@@ -361,14 +365,14 @@ resource "aws_cloudwatch_metric_alarm" "rds_free_storage" {
 }
 
 # ---- RDS: CPU 과다 ----
-#   db.t4g.micro 다. CPU 가 15분 연속 80% 를 넘으면 21:45 마감 직전 몰림을 못 버틴다는 뜻이다.
+#   db.t4g.micro 다. CPU 가 15분 연속 80% 를 넘으면 22:15 마감 직전 몰림을 못 버틴다는 뜻이다.
 resource "aws_cloudwatch_metric_alarm" "rds_cpu" {
   count = local.rds_enabled ? 1 : 0
 
   alarm_name = "${var.name_prefix}-rds-cpu-high"
   alarm_description = join(" ", [
     "RDS CPU 사용률이 15분 연속 ${var.rds_cpu_threshold_percent}% 를 넘었다.",
-    "21:45 마감 직전 등록 몰림을 못 버티면 등록 자체가 실패한다.",
+    "22:15 마감 직전 등록 몰림을 못 버티면 등록 자체가 실패한다.",
     "조치: 느린 쿼리 확인 후 인스턴스 클래스 상향(db_instance_class).",
   ])
 

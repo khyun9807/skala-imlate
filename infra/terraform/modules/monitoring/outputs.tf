@@ -77,7 +77,7 @@ output "dispatch_metric_contract" {
     failures   = var.dispatch_failures_metric_name
     dimensions = var.dispatch_metric_dimensions
     unit       = "Count"
-    note       = "DispatchCompleted 는 21:50 배치 종료 시 값 1 이상으로 1회. DispatchFailures 는 실패 건수(0 이면 올리지 않아도 된다)."
+    note       = "DispatchCompleted 는 22:25 배치 종료 시 값 1 이상으로 1회. DispatchFailures 는 실패 건수(0 이면 올리지 않아도 된다)."
   }
 }
 
@@ -86,6 +86,6 @@ output "heartbeat_alarm_window" {
   value = var.enable_dispatch_heartbeat_alarm ? join(" ", [
     "period 300초 × evaluation_periods 288 = 24시간 창.",
     "최근 24시간에 DispatchCompleted 가 한 번이라도 있으면 OK, 하나도 없으면 ALARM(missing = breaching).",
-    "정상 운영 시 21:50 하트비트 덕분에 하루 종일 OK 를 유지하고, 발송이 없는 날에만 21:55~22:10 KST 에 한 번 전이한다.",
+    "정상 운영 시 22:25 하트비트 덕분에 하루 종일 OK 를 유지하고, 발송이 없는 날에만 22:30~22:10 KST 에 한 번 전이한다.",
   ]) : "비활성(enable_dispatch_heartbeat_alarm = false)"
 }

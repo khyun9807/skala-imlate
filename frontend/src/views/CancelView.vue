@@ -64,13 +64,16 @@ const FIELD_KEYS: FieldKey[] = ['className', 'studentName', 'roomNumber', 'passw
 /** 숫자만 받는 필드. 이름은 한글 조합이 깨지므로 절대 넣지 않는다. */
 const DIGIT_FIELDS: FieldKey[] = ['className', 'roomNumber']
 
+// 취소 마감(기본 22:20)은 등록 마감(22:15)보다 5분 늦다. 'cancel' 을 빼먹으면
+// 등록이 닫힌 22:15~22:20 동안 화면이 "취소도 마감"이라고 거짓말한다.
 const {
   windowInfo,
   state: windowState,
   errorMessage: windowError,
+  closesAtIso: cancelClosesAtIso,
   targetDate,
   refresh: refreshWindow,
-} = useServerClock()
+} = useServerClock('cancel')
 
 // 취소하려는 사람은 방금 등록한 사람이다. 반·이름·호수를 다시 치게 하지 않는다(R6 와 같은 취지).
 // 비밀번호는 저장하지 않으므로 그 칸만 비어 있다.
@@ -112,8 +115,17 @@ const roomFieldRef = ref<InstanceType<typeof FormField> | null>(null)
 const passwordFieldRef = ref<InstanceType<typeof FormField> | null>(null)
 const resultRef = ref<HTMLElement | null>(null)
 
-/** 마감 시각 라벨 (`21:45`) */
-const closeTimeLabel = computed(() => formatClockTime(windowInfo.value?.closesAt))
+/** 취소 마감 시각 라벨 (`22:20`). 등록 마감이 아니라 취소 마감을 보여준다. */
+const closeTimeLabel = computed(() => formatClockTime(cancelClosesAtIso.value))
+
+/**
+ * 등록 마감 시각 라벨 (`22:15`).
+ *
+ * 취소 화면인데 등록 마감이 필요한 이유 — "취소했다가 다시 등록"은 <b>등록</b> 마감을 따른다.
+ * 등록 마감과 취소 마감 사이(22:15~22:20)에 취소하면 그날은 다시 등록할 수 없으므로,
+ * 그 사실을 문구로 알려 줘야 한다.
+ */
+const registerCloseTimeLabel = computed(() => formatClockTime(windowInfo.value?.closesAt))
 
 /** 복귀 시각 라벨 (`23:30`) */
 const returnTimeLabel = computed(() => formatTimeHm(windowInfo.value?.returnTime))
@@ -349,8 +361,9 @@ const submitLabel = computed(() => {
           {{ result.alreadyCancelled ? '이미 취소되어 있었습니다' : '취소되었습니다' }}
         </span>
         <span>{{ result.message }}</span>
-        <span v-if="returnTimeLabel" class="text-sm">
-          다시 {{ returnTimeLabel }} 복귀가 필요해지면 마감 전에 다시 등록할 수 있습니다.
+        <span v-if="returnTimeLabel && registerCloseTimeLabel" class="text-sm">
+          다시 {{ returnTimeLabel }} 복귀가 필요해지면 등록 마감({{ registerCloseTimeLabel }}) 전까지
+          다시 등록할 수 있습니다. 등록 마감이 지났다면 오늘은 다시 등록할 수 없습니다.
         </span>
         <span>
           <RouterLink class="btn btn--secondary" to="/">등록 화면으로</RouterLink>
@@ -483,7 +496,11 @@ const submitLabel = computed(() => {
       <section class="card card--flat" aria-labelledby="cancel-notice-title">
         <h2 id="cancel-notice-title" class="card__title">안내</h2>
         <ul class="notice-list">
-          <li v-if="closeTimeLabel">취소는 등록과 마찬가지로 {{ closeTimeLabel }}까지만 가능합니다.</li>
+          <li v-if="closeTimeLabel">취소는 {{ closeTimeLabel }}까지 가능합니다.</li>
+          <li v-if="registerCloseTimeLabel">
+            등록 마감({{ registerCloseTimeLabel }})이 지난 뒤에도 잠시 취소는 됩니다. 다만 그 뒤로는
+            <b>다시 등록할 수 없으니</b> 신중히 눌러 주세요.
+          </li>
           <li>비밀번호를 잊었다면 취소할 수 없습니다. 사감 선생님이나 운영진에게 문의해 주세요.</li>
           <li>비밀번호를 여러 번 틀리면 그날은 더 시도할 수 없습니다.</li>
         </ul>

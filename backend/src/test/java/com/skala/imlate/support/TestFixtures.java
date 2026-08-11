@@ -78,11 +78,24 @@ public final class TestFixtures {
         return imlateProperties(LocalTime.MIDNIGHT, LocalTime.of(22, 0));
     }
 
-    /** 등록 창 시각만 바꾼 설정. */
+    /**
+     * 등록 창 시각만 바꾼 설정.
+     *
+     * <p>취소 마감은 지정하지 않으므로 {@code max(closeTime, 기본값 22:20)} 이 된다 —
+     * 즉 <b>등록 마감보다 이르지 않다</b>. 취소 마감 자체를 검증하려면
+     * {@link #imlateProperties(LocalTime, LocalTime, LocalTime)} 로 명시한다.
+     */
     public static ImlateProperties imlateProperties(LocalTime openTime, LocalTime closeTime) {
+        return imlateProperties(openTime, closeTime, null);
+    }
+
+    /** 등록 마감과 취소 마감을 따로 지정한 설정. */
+    public static ImlateProperties imlateProperties(LocalTime openTime, LocalTime closeTime,
+                                                    LocalTime cancelCloseTime) {
         return new ImlateProperties(
                 "Asia/Seoul",
-                new ImlateProperties.Registration(openTime, closeTime, RETURN_TIME, CURFEW_TIME, 20, 20),
+                new ImlateProperties.Registration(openTime, closeTime, cancelCloseTime,
+                        RETURN_TIME, CURFEW_TIME, 20, 20, null),
                 new ImlateProperties.Wal("imlate:test:wal", 7),
                 new ImlateProperties.Lookup(LOOKUP_BASE_URL, TOKEN_SECRET, 48),
                 new ImlateProperties.Admin("test-admin-key"));

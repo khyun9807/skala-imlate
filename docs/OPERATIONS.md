@@ -60,30 +60,33 @@ aws ssm start-session --target $IID --region $REGION
 하루 흐름은 이렇습니다(전부 KST, 전부 설정값 — §5.2 로 바꿀 수 있습니다).
 
 ```
-00:00 등록 시작 → 21:45 등록 마감 → 21:50 사감 발송 → (22:05 / 22:20 실패분 재시도)
-                → 22:30 출입문 잠김 → 23:30 일괄 개방
+00:00 등록 시작 → 22:15 등록 마감 → 22:20 취소 마감 → 22:25 사감 발송
+                → 22:30 출입문 잠김 → (22:35 / 22:45 실패분 재시도) → 23:30 일괄 개방
 ```
 
 | 시각 | 확인 | 방법 | 실패하면 |
 |---|---|---|---|
 | 아침(아무 때나) | 서비스 살아 있는가 | `Invoke-RestMethod "$BASE/healthz"` | [RUNBOOK §3](RUNBOOK.md#3-인스턴스가-죽었다-알람을-받았을-때) |
-| 21:35 | 등록 창이 열려 있는가 | `Invoke-RestMethod "$BASE/api/v1/registrations/window"` (`open:true`, `closesAt` 이 21:45 인지) | [RUNBOOK §2.1](RUNBOOK.md#21-마감-이후인가-409--대개-정상) |
-| 21:46 | 마감되었는가 | `summary` 의 `"open": false` 확인 | 〃 |
-| **21:52** | **발송 성공했는가 ★** | `(Invoke-RestMethod "$BASE/api/v1/admin/notifications?date=$TODAY" -Headers $H).items` | [RUNBOOK §1](RUNBOOK.md#1-2150인데-사감님이-문자를-못-받았다--최우선) |
-| 21:52 | 대사 결과가 `CONSISTENT`/`RECOVERED` 인가 | `Invoke-RestMethod "$BASE/api/v1/admin/reconciliation?date=$TODAY" -Headers $H` | [RUNBOOK §4](RUNBOOK.md#4-명단이-이상하다-인원이-안-맞는다) |
-| 22:25 | 재시도 후에도 FAILED가 남았는가 | 위 이력 API에서 `status: "FAILED"` 검색 | [RUNBOOK §1.8](RUNBOOK.md#18-수동-재발송-원인-해결-후) |
+| 22:05 | 등록 창이 열려 있는가 | `Invoke-RestMethod "$BASE/api/v1/registrations/window"` (`open:true`, `closesAt` 이 22:15 인지) | [RUNBOOK §2.1](RUNBOOK.md#21-마감-이후인가-409--대개-정상) |
+| 22:16 | 마감되었는가 | `summary` 의 `"open": false` 확인 | 〃 |
+| **22:27** | **발송 성공했는가 ★** | `(Invoke-RestMethod "$BASE/api/v1/admin/notifications?date=$TODAY" -Headers $H).items` | [RUNBOOK §1](RUNBOOK.md#1-2225인데-사감님이-문자를-못-받았다--최우선) |
+| 22:27 | 대사 결과가 `CONSISTENT`/`RECOVERED` 인가 | `Invoke-RestMethod "$BASE/api/v1/admin/reconciliation?date=$TODAY" -Headers $H` | [RUNBOOK §4](RUNBOOK.md#4-명단이-이상하다-인원이-안-맞는다) |
+| 22:47 | 재시도(22:35 / 22:45) 후에도 FAILED가 남았는가 | 위 이력 API에서 `status: "FAILED"` 검색 | [RUNBOOK §1.8](RUNBOOK.md#18-수동-재발송-원인-해결-후) |
 | **22:30 전** | **사감님이 명단을 받았는가 ★** | 문 잠기기 전에 확인 | [RUNBOOK §1.7](RUNBOOK.md#17-최후-수단--조회-페이지-링크를-직접-전달) |
 | 다음날 | 통계 스냅샷이 저장되었는가 | `SELECT * FROM daily_stat ORDER BY stat_date DESC LIMIT 5;` | §6.3 |
 
-> **21:52 확인은 사람이 합니다.** 자동 알림(§5.7)과 CloudWatch 알람을 붙였지만,
+> **22:27 확인은 사람이 합니다.** 자동 알림(§5.7)과 CloudWatch 알람을 붙였지만,
 > **알람이 실제로 우는 것을 확인하기 전까지는 그것을 감지 수단으로 믿지 마세요**
 > (구독 미확인·지표 미연결이면 침묵합니다 — [DEPLOYMENT.md §11.3](DEPLOYMENT.md#113-알람이-만들어졌는지--지금-상태가-어떤지)).
 > 실제로 알리고 IP 미등록·SES 미검증으로 두 번 실패했고, 두 번 다 관리 API 를 직접 조회하고서야 알았습니다.
 >
-> 마감(21:45)과 통금(22:30) 사이 45분이 "명단을 받아 확인하는 시간"입니다.
-> 발송이 실패해도 재시도 2회(22:05 / 22:20)가 통금 전에 끝나도록 배치되어 있습니다.
+> 발송(22:25)과 통금(22:30) 사이는 **5분뿐**입니다. 마감을 22:15 로 늦추면서 예전의 여유가 사라졌고,
+> 재시도 2회(22:35 / 22:45)도 **통금 이후**로 밀렸습니다.
+> 그래서 22:27 확인에서 실패를 발견하면 **재시도를 기다리지 말고** 바로
+> [RUNBOOK §1](RUNBOOK.md#1-2225인데-사감님이-문자를-못-받았다--최우선) 로 내려가세요.
+> 최종 마지노선은 통금(22:30)이 아니라 **일괄 개방(23:30)** 입니다.
 
-21:52 한 번에 훑기 (PowerShell):
+22:27 한 번에 훑기 (PowerShell):
 
 ```powershell
 $TODAY = (Get-Date).ToString("yyyy-MM-dd")
@@ -179,7 +182,7 @@ curl -s "$API/api/v1/admin/notifications?date=$TODAY" -H "X-Admin-Key: $ADMIN_KE
 - [ ] **실제 발송 리허설**: 테스트 등록 1건 → `dispatch?force=true` → 문자·메일 수신 확인 → 테스트 데이터 정리
       (리허설 수신처를 잠깐 본인 번호로 바꿔 두면 사감님을 놀라게 하지 않습니다)
 - [ ] 리허설 후 사감 연락처를 **실제 값으로 되돌렸는지** 재확인
-- [ ] 21:50 스케줄이 KST 로 도는지 다음 날 로그로 확인
+- [ ] 22:25 스케줄이 KST 로 도는지 다음 날 로그로 확인
 
       ```powershell
       Run-OnApp "grep '사감 발송' /var/log/imlate/imlate.log | tail -5"
@@ -237,7 +240,7 @@ curl -s "$API/api/v1/admin/notifications?date=$TODAY" -H "X-Admin-Key: $ADMIN_KE
 
  대상일    : 2026년 8월 5일(수)
  총 인원   : 12명
- 등록 마감 : 21:45 (마감된 명단입니다)
+ 등록 마감 : 22:15 (마감된 명단입니다)
  복귀 시각 : 23:30 (출입문 일괄 개방)
  통금 시각 : 22:30 (이후 출입문 잠김)
 
@@ -251,7 +254,7 @@ curl -s "$API/api/v1/admin/notifications?date=$TODAY" -H "X-Admin-Key: $ADMIN_KE
  1반 5명 / 2반 7명
 
 [안내]
- - 등록은 21:45에 마감되었습니다. (이후 등록분은 없습니다)
+ - 등록은 22:15에 마감되었습니다. (이후 등록분은 없습니다)
  - 22:30 이후 기숙사 출입문은 잠깁니다.
  - 위 명단의 교육생은 23:30에 출입문이 일괄 개방될 때 함께 입관합니다.
  - 명단에 없는 교육생은 22:30 이전에 복귀해야 합니다.
@@ -282,7 +285,7 @@ curl -s -X POST "$API/api/v1/admin/notifications/preview?date=2026-08-05" \
 
 ## 3. 발송 실패 시 대응 (요약)
 
-> **원인 분기·실패 사유 해석·최후 수단까지 전체 절차는 [RUNBOOK §1](RUNBOOK.md#1-2150인데-사감님이-문자를-못-받았다--최우선) 에 있습니다.**
+> **원인 분기·실패 사유 해석·최후 수단까지 전체 절차는 [RUNBOOK §1](RUNBOOK.md#1-2225인데-사감님이-문자를-못-받았다--최우선) 에 있습니다.**
 > 여기에는 **가장 많이 쓰는 명령 세 개**만 둡니다(중복을 줄여 두 문서가 어긋나지 않게 합니다).
 
 ### 3.1 상태 확인
@@ -344,7 +347,7 @@ Invoke-RestMethod "$BASE/api/v1/admin/reconciliation?date=$TODAY" -Headers $H | 
 - **`GET /api/v1/admin/reconciliation` 은 복구하지 않습니다**(부작용 없는 GET).
   복구는 발송 경로(`dispatch`)에서만 일어납니다 — "봤는데 안 고쳐졌다"는 대부분 이것 때문입니다.
 - 그래서 **발송 전에 조회하면 아직 복구되지 않은 `walOnly` 때문에 `MISMATCH` 로 보일 수 있습니다.**
-  21:50 발송 이후에도 남아 있으면 그때가 진짜 문제입니다.
+  22:25 발송 이후에도 남아 있으면 그때가 진짜 문제입니다.
 
 ---
 
@@ -368,35 +371,49 @@ aws ssm send-command --instance-ids "$INSTANCE_ID" --region "$REGION" \
 
 로컬/온프레미스라면 `backend/config/application-secret.yml` 을 고치고 애플리케이션을 재시작합니다.
 
-### 5.2 등록 마감시간 변경 (예: 21:45 → 21:30)
+### 5.2 등록 마감시간 변경 (예: 22:15 → 21:30)
 
 코드 수정 없이 설정만 바꿉니다. 관련 값은 서로 맞물려 있으니 함께 확인하세요.
 
 | 환경변수 | 프로퍼티 | 기본값 | 의미 |
 |---|---|---|---|
-| `IMLATE_REGISTRATION_CLOSE_TIME` | `imlate.registration.close-time` | **`21:45`** | 이 시각 **정각부터** 등록 거부 |
-| `IMLATE_NOTIFICATION_DISPATCH_CRON` | `imlate.notification.dispatch-cron` | **`0 50 21 * * *`** | 발송 시각(= 21:50, 마감 + 5분) |
-| `IMLATE_NOTIFICATION_RETRY_CRON` | `imlate.notification.retry-cron` | **`0 5,20 22 * * *`** | 실패 재시도(= 22:05 / 22:20) |
+| `IMLATE_REGISTRATION_CLOSE_TIME` | `imlate.registration.close-time` | **`22:15`** | 이 시각 **정각부터** 등록 거부 |
+| `IMLATE_REGISTRATION_CANCEL_CLOSE_TIME` | `imlate.registration.cancel-close-time` | **`22:20`** | 이 시각 **정각부터** 취소 거부. 등록 마감보다 이르게 넣으면 등록 마감까지 끌어올린다 |
+| `IMLATE_NOTIFICATION_DISPATCH_CRON` | `imlate.notification.dispatch-cron` | **`0 25 22 * * *`** | 발송 시각(= 22:25, 마감 + 5분) |
+| `IMLATE_NOTIFICATION_RETRY_CRON` | `imlate.notification.retry-cron` | **`0 35,45 22 * * *`** | 실패 재시도(= 22:35 / 22:45) |
 | `IMLATE_REGISTRATION_CURFEW_TIME` | `imlate.registration.curfew-time` | `22:30` | 문 잠김(안내 문구용) — **변경 없음** |
 | `IMLATE_REGISTRATION_RETURN_TIME` | `imlate.registration.return-time` | `23:30` | 일괄 개방(안내 문구용) — **변경 없음** |
 | — | `imlate.registration.open-time` | `00:00` | 등록 시작(환경변수 미노출, yml 직접 수정) — **변경 없음** |
 
-> **이력:** 원래는 마감 22:00 / 발송 22:10 / 재시도 22:25·22:40 이었으나,
-> 운영자 요청으로 **마감 21:45 / 발송 21:50 / 재시도 22:05·22:20** 으로 앞당겼습니다.
+> **이력:** 원래는 마감 22:00 / 발송 22:10 / 재시도 22:25·22:40 이었습니다.
+> 1차로 마감 21:45 / 발송 21:50 / 재시도 22:05·22:20 으로 앞당겼고,
+> 2차(현재)로 **마감 22:15 / 취소 마감 22:20 / 발송 22:25 / 재시도 22:35·22:45** 로 늦추면서
+> **취소 마감을 등록 마감과 분리**했습니다(등록이 닫힌 뒤에도 5분은 취소 가능).
 > 통금(22:30)과 일괄 개방(23:30), 등록 시작(00:00)은 그대로입니다.
+>
+> ⚠️ 2차 조정으로 **재시도가 통금(22:30) 이후**가 되었습니다. 발송이 실패하면
+> 사감님이 문을 잠근 뒤에 재시도가 도는 셈이니, 22:25 실패 알림을 받으면
+> 재시도를 기다리지 말고 §1 런북대로 즉시 손을 쓰는 편이 안전합니다.
 
-**지켜야 할 순서:** `등록 시작(00:00) < 마감 < 발송 < 재시도 < 통금(22:30) < 일괄 개방(23:30)`
-발송이 통금을 넘어가면 사감님이 문을 잠근 뒤에 명단을 받게 되므로 의미가 없습니다.
+**지켜야 할 순서:** `등록 시작(00:00) < 등록 마감 ≤ 취소 마감 < 발송 < 재시도 < 일괄 개방(23:30)`
+발송은 **취소 마감 이후**여야 합니다 — 앞서면 마감 직전에 취소한 사람이 명단에 남습니다.
+그리고 발송은 통금(22:30) 이전이어야 사감님이 문을 잠그기 전에 명단을 받습니다.
+재시도만은 통금을 넘겨도 되지만, 일괄 개방(23:30) 전에는 반드시 끝나야 합니다.
+(이 순서는 `scripts/integration-test.mjs` §1-3 이 자동으로 단언합니다)
 
 ```bash
 aws ssm put-parameter --name "/imlate/prod/IMLATE_REGISTRATION_CLOSE_TIME" \
   --value '21:30' --type SecureString --overwrite --region "$REGION"
 aws ssm put-parameter --name "/imlate/prod/IMLATE_NOTIFICATION_DISPATCH_CRON" \
   --value '0 35 21 * * *' --type SecureString --overwrite --region "$REGION"
-# 재시도(22:05 / 22:20)는 여전히 "발송 이후 · 통금 이전" 이므로 그대로 두어도 됩니다.
+# 재시도(22:35 / 22:45)는 여전히 "발송 이후 · 일괄 개방(23:30) 이전" 이므로 그대로 두어도 됩니다.
 # 바꾼다면 cron 한 줄에 여러 시각을 넣을 때 시·분이 곱해진다는 점에 주의하세요.
-#   '0 5,20 22 * * *'    → 22:05, 22:20        (의도한 값)
-#   '0 50 21,22 * * *'   → 21:50, 22:50        (22:50 은 통금 이후 — 잘못된 예)
+#   '0 35,45 22 * * *'   → 22:35, 22:45        (의도한 값)
+#   '0 35,45 22,23 * * *' → 22:35, 22:45, 23:35, 23:45   (23:35·23:45 는 일괄 개방 이후 — 잘못된 예)
+#
+# ※ 취소 마감(IMLATE_REGISTRATION_CANCEL_CLOSE_TIME)도 함께 확인하세요.
+#   등록 마감만 당기고 취소 마감을 그대로 두면 취소 창만 넓어지고,
+#   취소 마감을 발송 시각 뒤로 밀면 취소한 사람이 명단에 남습니다.
 # 재기동 (5.1 의 send-command)
 ```
 
@@ -479,7 +496,7 @@ AWS WAF 상한은 Terraform `waf_rate_limit_per_5min`, nginx는 `infra/nginx/iml
 
 지금까지 **발송 실패가 조용했습니다.** `notification_dispatch` 테이블에 기록만 남고 아무 통보가 없어서,
 알리고 IP 미등록·SES 미검증으로 두 번 실패했을 때 모두 관리 API 를 직접 조회하고서야 알았습니다.
-또 CloudWatch 알람이 0개라, 21:50 직전에 인스턴스가 죽으면 발송이 통째로 실패해도 아무도 몰랐습니다.
+또 CloudWatch 알람이 0개라, 22:25 직전에 인스턴스가 죽으면 발송이 통째로 실패해도 아무도 몰랐습니다.
 
 #### 애플리케이션 설정 (SSM `/imlate/prod/*`)
 
@@ -632,7 +649,7 @@ sudo grep "rate limit 차단 발생"          /var/log/imlate/imlate.log
 
 | 증상 | 어디로 |
 |---|---|
-| 21:50인데 사감님이 문자를 못 받았다 | [RUNBOOK §1](RUNBOOK.md#1-2150인데-사감님이-문자를-못-받았다--최우선) |
+| 22:25인데 사감님이 문자를 못 받았다 | [RUNBOOK §1](RUNBOOK.md#1-2225인데-사감님이-문자를-못-받았다--최우선) |
 | 등록이 안 된다는 문의(409 / 429 / 500) | [RUNBOOK §2](RUNBOOK.md#2-등록이-안-된다는-문의) |
 | 서비스 응답 없음 / 인스턴스가 죽었다 / 알람 수신 | [RUNBOOK §3](RUNBOOK.md#3-인스턴스가-죽었다-알람을-받았을-때) |
 | 명단 인원이 안 맞는다 / `MISMATCH` | [RUNBOOK §4](RUNBOOK.md#4-명단이-이상하다-인원이-안-맞는다) |
@@ -663,7 +680,7 @@ sudo grep "rate limit 차단 발생"          /var/log/imlate/imlate.log
 
 ### 8.3 MySQL(RDS) 장애
 
-등록이 500으로 실패합니다. 다만 **WAL에는 남아 있으므로** DB 복구 후 21:50 발송 경로의 대사
+등록이 500으로 실패합니다. 다만 **WAL에는 남아 있으므로** DB 복구 후 22:25 발송 경로의 대사
 (또는 수동 `dispatch?force=true`)에서 누락분이 자동 복구됩니다 — 절차는
 [RUNBOOK §2.3](RUNBOOK.md#23-500-인가--db-장애-데이터는-잃지-않는다).
 
@@ -700,7 +717,7 @@ TTL을 늘리려면 `IMLATE_LOOKUP_TOKEN_TTL_HOURS` 를 조정합니다.
 
 | 사용자 화면 문구 | 원인 | 확인 |
 |---|---|---|
-| "등록 마감 시간(21:45)이 지났습니다." | 마감 후(21:45 이후). 다음 날 대상 등록은 자정에 열린다 | `window` 응답의 `open`, `closesAt` |
+| "등록 마감 시간(22:15)이 지났습니다." | 마감 후(22:15 이후). 다음 날 대상 등록은 자정에 열린다 | `window` 응답의 `open`, `closesAt` |
 | "요청이 너무 많습니다…" | rate limit | 같은 IP(공용 Wi-Fi/NAT)에서 다수 접속인지 확인 |
 | "반은 숫자만 입력해 주세요" | `1반` 처럼 글자를 섞음 | 반은 숫자만. `1반` → `1` 로 입력 |
 | "기숙사 호수는 숫자만 입력해 주세요" | `302호`·`B-101` 입력 | 호수는 숫자만. 문자가 섞인 호수 체계라면 운영진에 문의 |

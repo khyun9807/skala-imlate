@@ -338,17 +338,23 @@ class RegistrationControllerTest {
         OffsetDateTime opensAt =
                 ZonedDateTime.of(TestFixtures.DATE, LocalTime.MIDNIGHT, TestFixtures.KST).toOffsetDateTime();
         OffsetDateTime closesAt =
-                ZonedDateTime.of(TestFixtures.DATE, LocalTime.of(22, 0), TestFixtures.KST).toOffsetDateTime();
+                ZonedDateTime.of(TestFixtures.DATE, LocalTime.of(22, 15), TestFixtures.KST).toOffsetDateTime();
+        OffsetDateTime cancelClosesAt =
+                ZonedDateTime.of(TestFixtures.DATE, LocalTime.of(22, 20), TestFixtures.KST).toOffsetDateTime();
         when(windowPolicy.describe()).thenReturn(new RegistrationWindow(TestFixtures.DATE, true,
-                serverTime, opensAt, closesAt, LocalTime.of(23, 30), LocalTime.of(22, 30), 3409L));
+                serverTime, opensAt, closesAt, LocalTime.of(23, 30), LocalTime.of(22, 30), 4009L,
+                true, cancelClosesAt, 4309L));
 
         mockMvc.perform(get(PATH + "/window"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.date").value("2026-08-05"))
                 .andExpect(jsonPath("$.open").value(true))
-                .andExpect(jsonPath("$.secondsUntilClose").value(3409))
+                .andExpect(jsonPath("$.secondsUntilClose").value(4009))
                 .andExpect(jsonPath("$.returnTime").value("23:30"))
-                .andExpect(jsonPath("$.curfewTime").value("22:30"));
+                .andExpect(jsonPath("$.curfewTime").value("22:30"))
+                // 취소 창은 등록 창과 별도로 내려간다. 프론트 취소 화면이 이 값을 본다.
+                .andExpect(jsonPath("$.cancelOpen").value(true))
+                .andExpect(jsonPath("$.secondsUntilCancelClose").value(4309));
     }
 
     @Test

@@ -2,7 +2,13 @@
  * 백엔드 REST API 응답 타입 정의. (SPEC §5.5, §7.2, §4.2 계약과 1:1 대응)
  */
 
-/** `GET /registrations/window` — 서버 시간 기준 등록 창 정보 */
+/**
+ * `GET /registrations/window` — 서버 시간 기준 등록 창 정보
+ *
+ * 등록과 취소는 마감이 다르다(기본 22:15 / 22:20). 두 벌이 함께 내려오므로
+ * 등록 화면은 `open`/`closesAt` 을, 취소 화면은 `cancelOpen`/`cancelClosesAt` 을 본다.
+ * 프론트가 한쪽에 5분을 더해서 쓰면 안 된다 — 간격은 서버 설정이라 언제든 바뀐다.
+ */
 export interface RegistrationWindow {
   /** 등록 대상일 (KST 기준 오늘) `yyyy-MM-dd` */
   date: string
@@ -18,8 +24,14 @@ export interface RegistrationWindow {
   returnTime: string
   /** 통금 시각 `22:30` */
   curfewTime: string
-  /** 마감까지 남은 초 */
+  /** 등록 마감까지 남은 초 */
   secondsUntilClose: number
+  /** 현재 취소 가능 여부 */
+  cancelOpen: boolean
+  /** 취소 마감 시각 (offset 포함 ISO) */
+  cancelClosesAt: string
+  /** 취소 마감까지 남은 초 */
+  secondsUntilCancelClose: number
 }
 
 /** `POST /registrations` 요청 바디 */

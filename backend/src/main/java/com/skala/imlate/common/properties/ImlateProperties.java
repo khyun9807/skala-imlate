@@ -48,34 +48,47 @@ public record ImlateProperties(
     /**
      * 등록 창 정책.
      *
-     * <p>하루 타임라인: <b>00:00 등록 시작 → 21:45 등록 마감 → 21:50 사감 발송 →
-     * 22:30 통금(문 잠김) → 23:30 일괄 개방</b>. 마감을 21:45 로 앞당긴 이유는
-     * 발송(21:50) 전에 명단을 확정할 5분을 확보하고, 사감이 통금(22:30) 전에
-     * 명단을 확인할 여유를 두기 위해서다. 21:45 이후에는 그날 등록이 닫히고,
-     * 자정(00:00)에 다음 날 대상 등록이 열린다.
+     * <p>하루 타임라인: <b>00:00 등록 시작 → 22:15 등록 마감 → 22:20 취소 마감 →
+     * 22:25 사감 발송 → 22:30 통금(문 잠김) → 22:35 · 22:45 실패분 재시도 →
+     * 23:30 일괄 개방</b>.
      *
-     * @param openTime      등록 시작 시각(포함, 기본 00:00)
-     * @param closeTime     등록 마감 시각(미포함, 기본 21:45)
-     * @param returnTime    연장 복귀 시각(기본 23:30) — 안내 문구용
-     * @param curfewTime    원래 통금 시각(기본 22:30) — 안내 문구용
-     * @param maxNameLength 이름 최대 길이
-     * @param maxRoomLength 호수 최대 길이
-     * @param cancel        등록 취소 정책
+     * <p><b>등록 마감과 취소 마감이 다르다.</b> 등록은 22:15 에 닫히지만 취소는 5분 더 열어 둔다 —
+     * 마감 직전에 등록하고 곧바로 마음이 바뀐 사람에게 되돌릴 틈을 주기 위해서다.
+     * 그 대신 발송(22:25)은 <u>취소 마감 뒤</u>에 있어야 한다. 발송이 취소 마감보다 앞서면
+     * 사감이 들고 있는 명단과 시스템이 어긋나고, 취소한 사람이 명단에 남는다.
+     *
+     * <p><b>세 시각의 순서는 깨지면 안 되는 불변식이다:</b>
+     * {@code close-time ≤ cancel-close-time < 발송 시각}. 앞의 두 개는 아래 정규 생성자가 보정하고,
+     * 발송 시각은 {@code imlate.notification.dispatch-cron} 이라 여기서 검사할 수 없다 —
+     * 마감 시각을 옮길 때는 cron 도 함께 옮겨야 한다({@link NotificationProperties} 참고).
+     *
+     * @param openTime        등록 시작 시각(포함, 기본 00:00)
+     * @param closeTime       등록 마감 시각(미포함, 기본 22:15)
+     * @param cancelCloseTime 취소 마감 시각(미포함, 기본 22:20). 등록 마감보다 이를 수 없다
+     * @param returnTime      연장 복귀 시각(기본 23:30) — 안내 문구용
+     * @param curfewTime      원래 통금 시각(기본 22:30) — 안내 문구용
+     * @param maxNameLength   이름 최대 길이
+     * @param maxRoomLength   호수 최대 길이
+     * @param cancel          등록 취소 정책
      */
     public record Registration(LocalTime openTime, LocalTime closeTime,
+                               LocalTime cancelCloseTime,
                                LocalTime returnTime, LocalTime curfewTime,
                                int maxNameLength, int maxRoomLength,
                                Cancel cancel) {
 
         /**
-         * 취소 정책 없이 만드는 축약 생성자(주로 테스트).
+         * 취소 마감·취소 정책 없이 만드는 축약 생성자(주로 테스트).
          *
          * <p><b>이 생성자가 생기면서 아래 정규 생성자에 {@link ConstructorBinding} 이 필수가 되었다.</b>
          * 스프링은 생성자가 둘 이상이면 어느 것으로 바인딩할지 스스로 판단하지 않는다.
          * 표시가 없으면 바인딩이 조용히 실패해 <u>application.yml 과 환경변수를 전부 무시하고</u>
          * 레코드 기본값만 쓰게 된다. 기본값이 설정값과 우연히 같으면 아무 문제 없어 보이지만,
          * {@code IMLATE_REGISTRATION_CLOSE_TIME} 같은 운영 스위치가 죽은 채로 배포된다.
-         * (실제로 로컬 통합 시험에서 마감 시각을 23:59 로 덮어써도 21:45 가 나와 발견했다)
+         * (실제로 로컬 통합 시험에서 마감 시각을 23:59 로 덮어써도 레코드 기본값이 그대로 나와 발견했다)
+         *
+         * <p>취소 마감을 {@code null} 로 넘기므로 아래 보정 규칙에 따라
+         * {@code max(closeTime, 기본값)} 이 된다 — 즉 <b>등록 마감보다 이르지 않다</b>.
          *
          * @param openTime      등록 시작 시각
          * @param closeTime     등록 마감 시각
@@ -87,16 +100,25 @@ public record ImlateProperties(
         public Registration(LocalTime openTime, LocalTime closeTime,
                             LocalTime returnTime, LocalTime curfewTime,
                             int maxNameLength, int maxRoomLength) {
-            this(openTime, closeTime, returnTime, curfewTime, maxNameLength, maxRoomLength, null);
+            this(openTime, closeTime, null, returnTime, curfewTime,
+                    maxNameLength, maxRoomLength, null);
         }
 
         /**
-         * 등록 마감 기본 시각(21:45).
+         * 등록 마감 기본 시각(22:15).
          *
          * <p>application.yml 의 {@code imlate.registration.close-time} 기본값과 반드시 같아야 한다.
          * 둘이 어긋나면 "설정을 지운 환경"과 "설정을 둔 환경"의 마감 시각이 달라진다.
          */
-        public static final LocalTime DEFAULT_CLOSE_TIME = LocalTime.of(21, 45);
+        public static final LocalTime DEFAULT_CLOSE_TIME = LocalTime.of(22, 15);
+
+        /**
+         * 취소 마감 기본 시각(22:20).
+         *
+         * <p>application.yml 의 {@code imlate.registration.cancel-close-time} 기본값과 같아야 한다.
+         * 발송(22:25)보다 5분 앞이다 — 이 간격이 "취소가 명단에 반영될 시간"이다.
+         */
+        public static final LocalTime DEFAULT_CANCEL_CLOSE_TIME = LocalTime.of(22, 20);
 
         @ConstructorBinding
         public Registration {
@@ -106,6 +128,15 @@ public record ImlateProperties(
             }
             if (closeTime == null) {
                 closeTime = DEFAULT_CLOSE_TIME;
+            }
+            if (cancelCloseTime == null) {
+                cancelCloseTime = DEFAULT_CANCEL_CLOSE_TIME;
+            }
+            // 취소 마감이 등록 마감보다 이르면 "등록은 됐는데 취소는 이미 닫힌" 구간이 생긴다.
+            // 그 구간에 걸린 사람은 잘못 등록한 것을 되돌릴 방법이 없으므로, 안전한 쪽(등록 마감까지
+            // 취소를 열어 두는 쪽)으로 끌어올린다. 설정을 줄여 놓아도 취소 창이 등록 창보다 좁아지지 않는다.
+            if (cancelCloseTime.isBefore(closeTime)) {
+                cancelCloseTime = closeTime;
             }
             if (returnTime == null) {
                 returnTime = LocalTime.of(23, 30);
@@ -174,7 +205,7 @@ public record ImlateProperties(
          * 반복 횟수를 아무리 올려도 이 조합이 강해지지는 않는다.
          *
          * <p>반대편 비용은 분명하다. 운영 인스턴스는 <b>t3.small(2 vCPU, 버스트형)</b>이고
-         * 등록은 21:45 마감 직전에 몰린다. 측정해 보니 10만 회는 1건당 약 100ms(개발 PC 기준),
+         * 등록은 22:15 마감 직전에 몰린다. 측정해 보니 10만 회는 1건당 약 100ms(개발 PC 기준),
          * 운영 인스턴스에서는 150~200ms다. 마감 직전 수십 명이 동시에 누르면 vCPU 2개에 그대로 줄을 서고,
          * 프론트 타임아웃(10초)에 걸리는 사람이 생긴다. <u>등록에 실패한 교육생은 명단에서 빠져
          * 22:30 에 문 밖에 갇힌다</u> — 이 시스템이 존재하는 이유가 바로 그것을 막는 것이다.

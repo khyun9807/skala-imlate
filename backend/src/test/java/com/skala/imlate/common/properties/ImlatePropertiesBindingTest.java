@@ -18,7 +18,7 @@ import org.springframework.context.annotation.Configuration;
  * <p><b>왜 이 테스트가 있는가</b> — {@code Registration} 레코드에 축약 생성자를 하나 추가했더니
  * 스프링이 어느 생성자로 바인딩할지 정하지 못해 <u>바인딩이 조용히 실패</u>했다.
  * 그 결과 application.yml 과 환경변수를 전부 무시하고 레코드 기본값만 쓰게 되었는데,
- * 기본값이 설정값과 우연히 같아서(둘 다 21:45) 화면상으로는 멀쩡해 보였다.
+ * 기본값이 설정값과 우연히 같아서(둘 다 22:15) 화면상으로는 멀쩡해 보였다.
  * 실제로는 {@code IMLATE_REGISTRATION_CLOSE_TIME} 같은 운영 스위치가 죽은 상태였다 —
  * 마감 시각을 바꾸려고 환경변수를 넣어도 아무 일도 일어나지 않는다.
  *
@@ -50,7 +50,7 @@ class ImlatePropertiesBindingTest {
                             context.getBean(ImlateProperties.class).registration();
 
                     assertThat(registration.openTime()).isEqualTo(LocalTime.of(1, 23));
-                    // 21:45(기본값)가 나오면 바인딩이 죽은 것이다.
+                    // 22:15(기본값)가 나오면 바인딩이 죽은 것이다.
                     assertThat(registration.closeTime()).isEqualTo(LocalTime.of(23, 59));
                     assertThat(registration.returnTime()).isEqualTo(LocalTime.of(23, 45));
                     assertThat(registration.curfewTime()).isEqualTo(LocalTime.of(22, 15));

@@ -100,7 +100,7 @@ variable "dispatch_metric_namespace" {
 }
 
 variable "dispatch_completed_metric_name" {
-  description = "발송 완료 하트비트 지표 이름. 앱은 21:50 배치가 끝나면 값 1 이상으로 1회 올린다."
+  description = "발송 완료 하트비트 지표 이름. 앱은 22:25 배치가 끝나면 값 1 이상으로 1회 올린다."
   type        = string
   default     = "DispatchCompleted"
 }

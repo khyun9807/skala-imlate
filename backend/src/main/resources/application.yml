@@ -134,18 +134,27 @@ logging:
 imlate:
   timezone: "${IMLATE_TIMEZONE:Asia/Seoul}"
 
-  # 등록 창: [open-time, close-time) — 21:45 정각부터 등록 거부
+  # 등록 창: [open-time, close-time) — 22:15 정각부터 등록 거부
+  # 취소 창: [open-time, cancel-close-time) — 22:20 정각부터 취소 거부
   #
   # 하루 타임라인(이 값들의 근거):
-  #   00:00 등록 시작 → 21:45 등록 마감 → 21:50 사감 발송(+5분) → 22:30 통금(문 잠김)
-  #   → 23:30 일괄 개방
-  #   · 마감(21:45)과 발송(21:50) 사이 5분은 마감 직전 등록분이 DB 에 안착하고
+  #   00:00 등록 시작 → 22:15 등록 마감 → 22:20 취소 마감 → 22:25 사감 발송
+  #   → 22:30 통금(문 잠김) → 22:35 · 22:45 실패분 재시도 → 23:30 일괄 개방
+  #
+  #   · 등록 마감(22:15)보다 취소 마감(22:20)이 5분 늦다. 마감 직전에 등록하고 곧바로
+  #     마음이 바뀐 사람에게 되돌릴 틈을 주기 위해서다. 그 5분 동안 새 등록은 거부된다.
+  #   · 취소 마감(22:20)과 발송(22:25) 사이 5분은 마감 직전 등록·취소분이 DB 에 안착하고
   #     WAL↔DB 대사가 끝나는 데 쓴다. 명단이 빠지면 교육생이 밖에서 밤을 새운다.
-  #   · 21:45 이후에는 그날 등록이 닫히고, 자정(00:00)에 다음 날 대상 등록이 열린다.
-  #   · 마감만 앞당겼고 통금(22:30)·일괄 개방(23:30)은 그대로다(안내 문구용 값).
+  #   · 자정(00:00)에 다음 날 대상 등록이 열린다.
+  #   · 통금(22:30)·일괄 개방(23:30)은 사감님과 합의된 값이라 그대로다(안내 문구용).
+  #
+  #   ※ 여기 세 시각의 순서는 불변식이다: close-time ≤ cancel-close-time < 발송 cron.
+  #     발송이 취소 마감보다 앞서면 취소한 사람이 사감 명단에 남는다.
+  #     마감을 옮길 때는 아래 notification.dispatch-cron / retry-cron 도 반드시 함께 옮긴다.
   registration:
     open-time: "00:00"
-    close-time: "${IMLATE_REGISTRATION_CLOSE_TIME:21:45}"
+    close-time: "${IMLATE_REGISTRATION_CLOSE_TIME:22:15}"
+    cancel-close-time: "${IMLATE_REGISTRATION_CANCEL_CLOSE_TIME:22:20}"
     return-time: "${IMLATE_REGISTRATION_RETURN_TIME:23:30}"
     curfew-time: "${IMLATE_REGISTRATION_CURFEW_TIME:22:30}"
     max-name-length: 20
@@ -194,19 +203,23 @@ imlate:
       - "${IMLATE_WEB_ALLOWED_ORIGIN_1:http://localhost:5173}"
       - "${IMLATE_WEB_ALLOWED_ORIGIN_2:http://localhost:4173}"
 
-  # 사감 발송 (R3, R9) — 21:50 발송, 실패분 22:05/22:20 재시도
+  # 사감 발송 (R3, R9) — 22:25 발송, 실패분 22:35/22:45 재시도
   #
   #   cron 은 6필드(초 분 시 일 월 요일)다. 5필드로 쓰면 기동 시 바인딩에 실패한다.
-  #   · dispatch 21:50  = 등록 마감(21:45) + 5분. 마감분 안착·대사 완료 후 발송한다.
-  #   · retry   22:05,22:20 = 발송 +15분 / +30분. 둘 다 통금(22:30) 전이라
-  #     사감이 문을 잠그기 전에 명단을 받는다.
+  #   · dispatch 22:25 = 취소 마감(22:20) + 5분. 마감분 안착·대사 완료 후 발송한다.
+  #     ※ 등록 마감(22:15)이 아니라 취소 마감 기준이다. 등록 마감 기준으로 잡으면
+  #       22:15~22:20 사이 취소가 명단에 반영되지 못한 채 발송된다.
+  #   · retry   22:35,22:45 = 발송 +10분 / +20분.
+  #     ※ 재시도가 통금(22:30) 이후로 넘어간 것은 의도한 타협이다. 등록을 22:15 까지
+  #       받기로 하면서 통금 전에 재시도 두 번을 끼워 넣을 자리가 없어졌다.
+  #       사감이 실제로 명단을 쓰는 시점은 일괄 개방(23:30)이므로 그 전에만 도착하면 된다.
   #     ※ 재시도 두 시각은 반드시 같은 "시"에 두어야 한 식으로 표현된다.
-  #       21:55 와 22:05 를 "0 55,5 21,22 * * *" 로 쓰면 21:05·21:55·22:05·22:55
+  #       22:55 와 23:05 를 "0 55,5 22,23 * * *" 로 쓰면 22:05·22:55·23:05·23:55
   #       네 번(발송 전 포함) 실행되므로 쓰면 안 된다.
   notification:
     enabled: ${IMLATE_NOTIFICATION_ENABLED:true}
-    dispatch-cron: "${IMLATE_NOTIFICATION_DISPATCH_CRON:0 50 21 * * *}"
-    retry-cron: "${IMLATE_NOTIFICATION_RETRY_CRON:0 5,20 22 * * *}"
+    dispatch-cron: "${IMLATE_NOTIFICATION_DISPATCH_CRON:0 25 22 * * *}"
+    retry-cron: "${IMLATE_NOTIFICATION_RETRY_CRON:0 35,45 22 * * *}"
     max-attempts: ${IMLATE_NOTIFICATION_MAX_ATTEMPTS:3}
     lock-ttl-seconds: ${IMLATE_NOTIFICATION_LOCK_TTL_SECONDS:300}
     # 문자·메일 말미의 문의처 안내. 운영진이 바뀌면 코드 수정 없이 여기(또는 환경변수)만 고친다.
@@ -237,7 +250,7 @@ imlate:
       # 성공까지 매일 알리면 알림 피로가 생겨 정작 실패 알림을 무시하게 된다.
       notify-on-success: ${IMLATE_NOTIFICATION_OPS_ALERT_NOTIFY_ON_SUCCESS:false}
 
-    # 발송 완료 하트비트 — 21:50 에 "아무 일도 일어나지 않은 경우"(인스턴스 다운)를 밖에서 감지한다.
+    # 발송 완료 하트비트 — 22:25 에 "아무 일도 일어나지 않은 경우"(인스턴스 다운)를 밖에서 감지한다.
     #   앱은 발송을 끝냈다는 신호만 남기고, 신호가 오지 않는 것을 CloudWatch 알람이 판정한다.
     #   현재 구현은 정해진 형식의 로그 한 줄이며, 로그 지표 필터가 지표로 바꾼다
     #   (LogDispatchHeartbeatPublisher 주석에 필터 패턴이 있다).
@@ -279,7 +292,7 @@ imlate:
   #
   # 전제: 교육생 전원이 기숙사 공용 와이파이 한 회선을 쓴다 = 서버에서 보면 공인 IP 가 1개다.
   #       그래서 "IP 당 N회" 를 사람 단위 제한으로 쓰면 N+1번째 학생부터 429 가 되고,
-  #       하필 21:45 마감 직전에 정상 사용자가 막힌다(실서비스 불가).
+  #       하필 22:15 마감 직전에 정상 사용자가 막힌다(실서비스 불가).
   #
   # 해결: 버킷 축을 둘로 나눈다.
   #   · IP 축(global/register/lookup) — 한 회선에서의 비정상 폭주(스크립트·DDoS)만 막는 굵은 그물.

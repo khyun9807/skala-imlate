@@ -128,7 +128,7 @@ const roomFieldRef = ref<InstanceType<typeof FormField> | null>(null)
 const passwordFieldRef = ref<InstanceType<typeof FormField> | null>(null)
 const resultRef = ref<InstanceType<typeof ResultCard> | null>(null)
 
-/** 마감 시각 라벨 (`21:45`). 서버 `closesAt` 에서 유도한다. */
+/** 마감 시각 라벨 (`22:15`). 서버 `closesAt` 에서 유도한다. */
 const closeTimeLabel = computed(() => formatClockTime(windowInfo.value?.closesAt))
 
 /** 복귀 시각 라벨 (`23:30`) */

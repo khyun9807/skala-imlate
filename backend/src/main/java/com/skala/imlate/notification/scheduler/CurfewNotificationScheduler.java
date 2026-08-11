@@ -15,8 +15,8 @@ import com.skala.imlate.notification.service.DispatchSummary;
 /**
  * 사감 발송 스케줄러(R3).
  *
- * <p>등록 마감(22:00) 10분 뒤인 <b>22:10</b> 에 당일 명단을 발송하고,
- * 22:25 / 22:40 에 실패한 채널만 재시도한다(cron 은 설정값).
+ * <p>취소 마감(22:20) 5분 뒤인 <b>22:25</b> 에 당일 명단을 발송하고,
+ * 22:35 / 22:45 에 실패한 채널만 재시도한다(cron 은 설정값).
  * {@code imlate.notification.enabled=false} 면 아무것도 하지 않는다.
  *
  * <p>스케줄러 스레드가 죽지 않도록 모든 예외를 잡아 로그로만 남긴다.

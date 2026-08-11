@@ -280,8 +280,9 @@ public class RegistrationService {
      *
      * <p><b>처리 순서와 그 이유</b>
      * <ol>
-     *   <li>등록 창 확인 — 마감(21:45) 뒤에는 취소할 수 없다. 명단은 21:50 에 사감에게 이미 나갔고,
-     *       그 뒤 취소를 허용하면 사감이 들고 있는 종이와 시스템이 어긋난다.
+     *   <li>취소 창 확인 — <b>등록 마감(22:15)이 아니라 취소 마감(22:20)</b>을 본다. 등록이 닫힌 뒤에도
+     *       5분은 되돌릴 수 있다. 그러나 취소 마감 뒤에는 받지 않는다 — 명단은 22:25 에 사감에게
+     *       나가고, 그 뒤 취소를 허용하면 사감이 들고 있는 종이와 시스템이 어긋난다.
      *       늦게 마음이 바뀐 경우는 문자에 적힌 문의처로 안내한다.</li>
      *   <li>입력 검증 — 형식이 틀린 요청은 시도 횟수에서 빼주지 않는다(대입에 쓸 수 없는 요청이므로).</li>
      *   <li>시도 횟수 확인 — 상한을 넘었으면 비밀번호를 <b>보기 전에</b> 거절한다.
@@ -300,8 +301,8 @@ public class RegistrationService {
             throw ApiException.of(ErrorCode.VALIDATION_FAILED, "취소 정보가 비어 있습니다.");
         }
 
-        // 1) 등록 창 확인 — 마감 뒤 취소는 받지 않는다.
-        windowPolicy.requireOpen();
+        // 1) 취소 창 확인 — 등록 마감이 아니라 취소 마감(더 늦다)을 본다.
+        windowPolicy.requireCancelOpen();
         LocalDate date = windowPolicy.targetDate();
 
         // 2) 정규화 후 재검증

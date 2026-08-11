@@ -475,7 +475,7 @@ class CurfewNotificationServiceTest {
     }
 
     @Test
-    @DisplayName("건너뛴 경우에도 하트비트는 남긴다 — 21:50 에 아무 신호도 없는 것과 구분되어야 한다")
+    @DisplayName("건너뛴 경우에도 하트비트는 남긴다 — 22:25 에 아무 신호도 없는 것과 구분되어야 한다")
     void 건너뛰어도_하트비트는_남긴다() {
         lockAcquired();
         when(registrationService.findByDate(TestFixtures.DATE)).thenReturn(List.of());

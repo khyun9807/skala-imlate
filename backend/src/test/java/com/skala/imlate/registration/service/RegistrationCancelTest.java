@@ -38,7 +38,7 @@ import com.skala.imlate.support.TestFixtures;
  *   <li>실패 사유(등록 없음 / 비밀번호 틀림)를 구분해 알려주지 않는다 — 응답 차이로
  *       "오늘 누가 등록했는지"가 새어 나가면 안 된다.</li>
  *   <li>시도 횟수를 다 쓰면 비밀번호를 <b>보기도 전에</b> 막는다(대입 방지의 핵심).</li>
- *   <li>마감(21:45) 뒤에는 취소할 수 없다 — 명단은 이미 사감에게 나갔다.</li>
+ *   <li>취소 마감(22:20) 뒤에는 취소할 수 없다 — 명단은 이미 사감에게 나갔다.</li>
  * </ul>
  */
 @DisplayName("등록 취소(RegistrationService.cancel)")
@@ -176,11 +176,11 @@ class RegistrationCancelTest {
     }
 
     @Test
-    @DisplayName("마감(21:45) 이후에는 취소할 수 없다 — 명단은 이미 사감에게 나갔다")
+    @DisplayName("취소 마감(22:20) 이후에는 취소할 수 없다 — 명단은 이미 사감에게 나갔다")
     void 마감_후에는_취소할_수_없다() {
-        // 등록 창 정책이 던지는 예외가 그대로 전파되어야 한다.
+        // 취소 창 정책이 던지는 예외가 그대로 전파되어야 한다.
         org.mockito.Mockito.doThrow(ApiException.of(ErrorCode.REGISTRATION_CLOSED, "마감되었습니다."))
-                .when(windowPolicy).requireOpen();
+                .when(windowPolicy).requireCancelOpen();
 
         assertThatThrownBy(() -> service.cancel(command(TestFixtures.CANCEL_PASSWORD)))
                 .isInstanceOf(ApiException.class)
@@ -189,6 +189,24 @@ class RegistrationCancelTest {
 
         // 마감이 우선이므로 시도 횟수도 소모하지 않는다.
         verify(cancelAttemptGuard, never()).recordFailure(any(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("취소는 등록 마감(requireOpen)이 아니라 취소 마감(requireCancelOpen)을 본다")
+    void 취소는_취소_마감을_본다() {
+        // 등록 마감이 지난 22:15~22:20 구간을 흉내 낸다 — requireOpen 은 던지고 requireCancelOpen 은 통과.
+        org.mockito.Mockito.doThrow(ApiException.of(ErrorCode.REGISTRATION_CLOSED, "등록 마감"))
+                .when(windowPolicy).requireOpen();
+
+        assertThatThrownBy(() -> service.cancel(command(TestFixtures.CANCEL_PASSWORD)))
+                .isInstanceOf(ApiException.class)
+                .extracting(ex -> ((ApiException) ex).code())
+                // 창 검사를 통과했다는 증거다. 취소 경로가 requireOpen 을 다시 쓰면
+                // 여기서 REGISTRATION_CLOSED 가 나와 실패한다.
+                .isEqualTo(ErrorCode.CANCEL_REJECTED);
+
+        verify(windowPolicy).requireCancelOpen();
+        verify(windowPolicy, never()).requireOpen();
     }
 
     @Test

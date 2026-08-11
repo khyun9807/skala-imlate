@@ -23,7 +23,7 @@ import jakarta.persistence.UniqueConstraint;
  *
  * <p><b>취소는 소프트 삭제다(V2).</b> 신원 정보(반·이름·호수·일자)는 끝까지 불변이고,
  * 바뀌는 것은 {@code cancelledAt} 과 {@code cancelPasswordHash} 둘뿐이다.
- * 행을 실제로 지우지 않는 이유는 Redis WAL 때문이다 — 지우면 21:50 대사가
+ * 행을 실제로 지우지 않는 이유는 Redis WAL 때문이다 — 지우면 22:25 대사가
  * "WAL 에는 있는데 DB 에 없다"고 보고 <u>취소한 등록을 되살린다</u>.
  * 상태 전이는 {@link #cancel(LocalDateTime)} / {@link #reactivate(String, LocalDateTime)} 두 개뿐이며,
  * 그 밖의 값을 바꾸는 메서드는 두지 않는다.
