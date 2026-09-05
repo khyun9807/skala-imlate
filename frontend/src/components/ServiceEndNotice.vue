@@ -73,7 +73,7 @@ const stopDateLabel = computed(() => formatKoreanDate(SERVICE_STOP_DATE))
     </p>
     <p class="end-notice__body">
       이제 과정을 떠나게 되어 계속 챙기기가 어렵고, 서버 비용도 생각보다 커져서 여기서
-      마무리합니다. 갑작스럽게 알려 드리게 되어 미안합니다.
+      마무리합니다.
     </p>
 
     <ul class="end-notice__list">
