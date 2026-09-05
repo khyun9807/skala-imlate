@@ -49,7 +49,7 @@ test.describe('서비스 종료 안내', () => {
     await expect(notice).toContainText('과정을 떠나게 되어')
     await expect(notice).toContainText('비용')
     // 개인정보 처리는 반드시 밝힌다(밝힌 대로 실제로 파기해야 한다).
-    await expect(notice).toContainText('모두 지워집니다')
+    await expect(notice).toContainText('모두 지워진다')
   })
 
   test('취소 화면에도 같은 날짜로 붙는다', async ({ page }) => {
@@ -62,7 +62,7 @@ test.describe('서비스 종료 안내', () => {
     await expect(notice).toContainText(END_DATE_LABEL)
   })
 
-  test('★ 사감 조회 화면에는 "사감님께 말씀하세요"가 뜨지 않는다', async ({ page }) => {
+  test('★ 어느 화면에도 "이후에는 이렇게 하라"는 지시가 없다', async ({ page }) => {
     await installApiMocks(page)
     await fixTime(page, '2026-09-05T12:00:00+09:00')
     await page.goto(LOOKUP_PATH)
@@ -70,9 +70,9 @@ test.describe('서비스 종료 안내', () => {
     const notice = page.getByRole('region', { name: NOTICE_TITLE })
     await expect(notice).toBeVisible()
     await expect(notice).toContainText(END_DATE_LABEL)
-    // 읽는 사람이 사감 본인이다. 본인에게 본인을 찾아가라고 하면 안 된다.
-    await expect(notice).not.toContainText('사감 선생님께 직접 말씀해 주세요')
-    await expect(notice).toContainText('교육생에게 직접 확인해')
+    // 종료 뒤 무엇을 어떻게 하라는 지시는 넣지 않는다 — 남은 사람들이 알아서 정할 몫이다.
+    await expect(notice).not.toContainText('사감 선생님께')
+    await expect(notice).not.toContainText('교육생에게')
   })
 
   test('남은 시간이 시간 단위로 보인다', async ({ page }) => {
@@ -103,8 +103,8 @@ test.describe('서비스 종료 안내', () => {
     await page.goto('/')
 
     const notice = page.getByRole('region', { name: NOTICE_TITLE })
-    await expect(notice).toContainText('마쳤습니다')
+    await expect(notice).toContainText('마쳤다')
     await expect(notice).not.toContainText('종료까지')
-    await expect(notice).not.toContainText('이용하실 수 없어요')
+    await expect(notice).not.toContainText('이용할 수 없다')
   })
 })

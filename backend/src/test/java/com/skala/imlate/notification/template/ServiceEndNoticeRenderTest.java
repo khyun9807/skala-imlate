@@ -42,11 +42,11 @@ class ServiceEndNoticeRenderTest {
         assertThat(sms).contains("9/8");
         assertThat(sms).contains("종료");
         // 사감이 알아야 하는 실질적 변화는 "명단이 더는 오지 않는다"는 것이다.
-        assertThat(sms).contains("발송되지 않습니다");
+        assertThat(sms).contains("발송되지 않는다");
     }
 
     @Test
-    @DisplayName("이메일 본문에 종료일·사유·이후 조치가 모두 들어간다")
+    @DisplayName("이메일 본문에 종료일과 사유가 들어간다")
     void 이메일에_종료_안내가_실린다() {
         String text = renderer.emailText(payload());
 
@@ -54,7 +54,6 @@ class ServiceEndNoticeRenderTest {
         assertThat(text).contains("2026년 9월 7일");
         assertThat(text).contains("9월 8일");
         assertThat(text).contains("비용");
-        assertThat(text).contains("교육생에게 직접 확인");
     }
 
     @Test

@@ -131,7 +131,7 @@ function printPage(): void {
         </template>
       </AppHeader>
 
-      <ServiceEndNotice audience="supervisor" />
+      <ServiceEndNotice />
 
       <!-- 토큰 없음 -->
       <section v-if="!hasToken" class="card">
