@@ -168,10 +168,18 @@ public class CurfewNotificationService {
 
             // WAL ↔ DB 대사(누락분 복구 포함) 후 명단을 읽는다.
             NoticePayload payload = buildPayload(date, true);
-            if (payload.totalCount() == 0) {
+            if (payload.totalCount() == 0
+                    && !CurfewNoticeRenderer.serviceEndNoticeActive(date)) {
                 // 요구사항: 1명도 없으면 발송하지 않는다.
                 log.info("복귀 등록 인원이 0명이라 사감 발송을 하지 않습니다. date={}", date);
                 return ExecutionResult.skipped(date, "NO_REGISTRATION");
+            }
+            if (payload.totalCount() == 0) {
+                // 서비스 종료 안내 기간에는 0명이어도 보낸다.
+                //   안내가 문자·메일에 실려 있는데 0명인 날 발송을 건너뛰면 사감 선생님이
+                //   종료를 모른 채 지나간다(실제로 9/5 토요일에 0명이라 스킵되어 못 나갔다).
+                //   이 예외는 종료일이 지나면 저절로 사라진다.
+                log.info("복귀 인원은 0명이지만 서비스 종료 안내를 위해 발송합니다. date={}", date);
             }
 
             List<NotificationProperties.Supervisor> supervisors = notificationProperties.supervisors();

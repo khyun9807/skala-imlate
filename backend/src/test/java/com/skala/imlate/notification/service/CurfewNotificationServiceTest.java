@@ -98,6 +98,23 @@ class CurfewNotificationServiceTest {
                 TestFixtures.clockAt(LocalTime.of(22, 10)));
     }
 
+    /**
+     * 서비스 종료일(2026-09-07) 이후의 날짜.
+     *
+     * <p>"0명이면 발송하지 않는다"는 원래 요구는 그대로 살아 있어야 한다. 다만 종료 안내 기간에는
+     * 0명이어도 보내는 예외가 생겼으므로, 원래 규칙을 검증하려면 그 예외 밖의 날짜를 써야 한다.
+     * (예외는 종료일이 지나면 저절로 사라진다)
+     */
+    private static final java.time.LocalDate AFTER_SERVICE_END = java.time.LocalDate.of(2026, 9, 8);
+
+    /** 종료 예외 밖의 날짜에 대한 페이로드 조립 스텁. */
+    private void stubAfterServiceEnd() {
+        when(accessTokenService.issue(AFTER_SERVICE_END)).thenReturn("TKN");
+        when(reconciliationService.reconcile(AFTER_SERVICE_END))
+                .thenReturn(TestFixtures.consistentReport(AFTER_SERVICE_END, 0L));
+        when(registrationService.findByDate(AFTER_SERVICE_END)).thenReturn(List.of());
+    }
+
     private void lockAcquired() {
         when(lockManager.tryAcquire(any(), anyString())).thenReturn(true);
     }
@@ -117,17 +134,39 @@ class CurfewNotificationServiceTest {
     @DisplayName("등록 인원이 0명이면 skipped=true(NO_REGISTRATION) 이고 발송기를 전혀 호출하지 않는다")
     void 등록이_0명이면_발송하지_않는다() {
         lockAcquired();
-        when(registrationService.findByDate(TestFixtures.DATE)).thenReturn(List.of());
+        stubAfterServiceEnd();
 
         DispatchSummary summary = service(properties(true, 3, SUPERVISOR_A, SUPERVISOR_B))
-                .dispatch(TestFixtures.DATE, false);
+                .dispatch(AFTER_SERVICE_END, false);
 
         assertThat(summary.skipped()).isTrue();
         assertThat(summary.skipReason()).isEqualTo("NO_REGISTRATION");
         assertThat(summary.targetCount()).isZero();
         verifyNoInteractions(smsSender, emailSender);
         verify(dispatchRepository, never()).save(any(NotificationDispatch.class));
-        verify(lockManager).release(eq(TestFixtures.DATE), anyString());
+        verify(lockManager).release(eq(AFTER_SERVICE_END), anyString());
+    }
+
+    @Test
+    @DisplayName("★ 종료 안내 기간에는 등록 0명이어도 발송한다 — 사감이 종료를 모른 채 지나가면 안 된다")
+    void 종료_안내_기간에는_0명이어도_발송한다() {
+        // 실제로 9/5(토)에 등록 0명이라 발송이 스킵되어 종료 안내가 나가지 못했다.
+        // 주말이 끼면 마지막 날까지 한 번도 못 받을 수 있어 예외를 뒀다.
+        lockAcquired();
+        when(registrationService.findByDate(TestFixtures.DATE)).thenReturn(List.of());
+        when(smsSender.send(anyString(), anyString(), anyString()))
+                .thenReturn(SendResult.ok("mid"));
+        when(emailSender.send(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(SendResult.ok("mid"));
+
+        DispatchSummary summary = service(properties(true, 3, SUPERVISOR_A))
+                .dispatch(TestFixtures.DATE, false);
+
+        assertThat(summary.skipped()).isFalse();
+        assertThat(summary.targetCount()).isZero();
+        // 0명이어도 문자·메일이 실제로 나갔는지 — 이게 이 예외의 존재 이유다.
+        verify(smsSender).send(anyString(), anyString(), anyString());
+        verify(emailSender).send(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -478,9 +517,9 @@ class CurfewNotificationServiceTest {
     @DisplayName("건너뛴 경우에도 하트비트는 남긴다 — 22:25 에 아무 신호도 없는 것과 구분되어야 한다")
     void 건너뛰어도_하트비트는_남긴다() {
         lockAcquired();
-        when(registrationService.findByDate(TestFixtures.DATE)).thenReturn(List.of());
+        stubAfterServiceEnd();
 
-        service(properties(true, 1, SUPERVISOR_A)).dispatch(TestFixtures.DATE, false);
+        service(properties(true, 1, SUPERVISOR_A)).dispatch(AFTER_SERVICE_END, false);
 
         ArgumentCaptor<DispatchHeartbeat> heartbeat = ArgumentCaptor.forClass(DispatchHeartbeat.class);
         verify(heartbeatPublisher).publish(heartbeat.capture());

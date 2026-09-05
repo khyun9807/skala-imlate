@@ -71,6 +71,26 @@ public class CurfewNoticeRenderer {
      * ------------------------------------------------------------------
      */
 
+    /**
+     * 마지막 운영일. 이 날까지는 <b>등록 인원이 0명이어도</b> 사감 발송을 한다.
+     *
+     * <p>원래 요구사항은 "1명도 없으면 전송 안 됨" 이고 그 규칙은 그대로다. 다만 종료 안내만은
+     * 반드시 닿아야 하는데, 등록이 0명인 날(주말 등)에 발송을 건너뛰면 사감 선생님이 종료를
+     * 모른 채 지나가게 된다. 실제로 9/5(토)에 0명이라 발송이 스킵되어 안내가 나가지 못했다.
+     *
+     * <p>이 예외는 <b>종료일이 지나면 저절로 사라진다</b> — 그 뒤에는 서비스 자체가 없다.
+     */
+    public static final java.time.LocalDate SERVICE_END_DATE = java.time.LocalDate.of(2026, 9, 7);
+
+    /**
+     * 그날 발송에 종료 안내를 실어야 하는지(= 0명이어도 보내야 하는지).
+     *
+     * @param date 발송 대상일
+     * @return 마지막 운영일 이전이거나 당일이면 true
+     */
+    public static boolean serviceEndNoticeActive(java.time.LocalDate date) {
+        return date != null && !date.isAfter(SERVICE_END_DATE);
+    }
     /** 종료 안내(문자용). 문자는 길이가 곧 비용이라 두 줄로 끝낸다. */
     private static final String SERVICE_END_SMS =
             "※ 이 서비스는 9/7(월)을 끝으로 종료됩니다. 9/8부터는 명단이 발송되지 않습니다.";
