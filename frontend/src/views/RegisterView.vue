@@ -15,6 +15,7 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import AppHeader from '../components/AppHeader.vue'
+import ServiceEndNotice from '../components/ServiceEndNotice.vue'
 import CountdownBadge from '../components/CountdownBadge.vue'
 import FormField from '../components/FormField.vue'
 import ResultCard from '../components/ResultCard.vue'
@@ -404,6 +405,8 @@ function clearSavedInput(): void {
           <span v-if="curfewTimeLabel" class="badge badge--neutral">{{ curfewTimeLabel }} 문 잠김</span>
         </template>
       </AppHeader>
+
+      <ServiceEndNotice />
 
       <CountdownBadge
         :state="windowState"

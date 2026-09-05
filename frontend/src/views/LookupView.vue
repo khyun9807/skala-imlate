@@ -11,6 +11,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 import AppHeader from '../components/AppHeader.vue'
+import ServiceEndNotice from '../components/ServiceEndNotice.vue'
 import RegistrationTable from '../components/RegistrationTable.vue'
 import { fetchLookup, toApiError } from '../api/client'
 import type { LookupResponse } from '../api/types'
@@ -129,6 +130,8 @@ function printPage(): void {
           <button v-if="data" type="button" class="btn btn--primary" @click="printPage">인쇄</button>
         </template>
       </AppHeader>
+
+      <ServiceEndNotice audience="supervisor" />
 
       <!-- 토큰 없음 -->
       <section v-if="!hasToken" class="card">

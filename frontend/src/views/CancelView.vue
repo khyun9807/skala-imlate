@@ -17,6 +17,7 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import AppHeader from '../components/AppHeader.vue'
+import ServiceEndNotice from '../components/ServiceEndNotice.vue'
 import FormField from '../components/FormField.vue'
 import { ApiError, cancelRegistration } from '../api/client'
 import type { CancelResponse } from '../api/types'
@@ -344,6 +345,8 @@ const submitLabel = computed(() => {
   <main id="main" class="app-main">
     <div class="container stack">
       <AppHeader title="야간 복귀 등록 취소" :subtitle="dateLabel" />
+
+      <ServiceEndNotice />
 
       <!-- 화면 낭독기용 상태 안내 -->
       <p class="sr-only" role="status" aria-live="polite">{{ statusMessage }}</p>
