@@ -49,7 +49,7 @@ test.describe('서비스 종료 안내', () => {
     await expect(notice).toContainText('과정을 떠나게 되어')
     await expect(notice).toContainText('비용')
     // 개인정보 처리는 반드시 밝힌다(밝힌 대로 실제로 파기해야 한다).
-    await expect(notice).toContainText('모두 지워진다')
+    await expect(notice).toContainText('모두 지워집니다')
   })
 
   test('취소 화면에도 같은 날짜로 붙는다', async ({ page }) => {
@@ -103,8 +103,8 @@ test.describe('서비스 종료 안내', () => {
     await page.goto('/')
 
     const notice = page.getByRole('region', { name: NOTICE_TITLE })
-    await expect(notice).toContainText('마쳤다')
+    await expect(notice).toContainText('마쳤습니다')
     await expect(notice).not.toContainText('종료까지')
-    await expect(notice).not.toContainText('이용할 수 없다')
+    await expect(notice).not.toContainText('이용할 수 없습니다')
   })
 })

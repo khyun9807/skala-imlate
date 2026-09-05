@@ -59,30 +59,30 @@ const stopDateLabel = computed(() => formatKoreanDate(SERVICE_STOP_DATE))
 
     <p class="end-notice__lead">
       <template v-if="ended">
-        <strong>{{ endDateLabel }}</strong>을 끝으로 야간 복귀 등록 서비스를 마쳤다.
+        <strong>{{ endDateLabel }}</strong>을 끝으로 야간 복귀 등록 서비스를 마쳤습니다.
       </template>
       <template v-else>
-        <strong>{{ endDateLabel }}</strong>을 끝으로 야간 복귀 등록 서비스를 마친다.
-        <strong>{{ stopDateLabel }}</strong>부터는 서비스가 종료되어 이용할 수 없다.
+        <strong>{{ endDateLabel }}</strong>을 끝으로 야간 복귀 등록 서비스를 마칩니다.
+        <strong>{{ stopDateLabel }}</strong>부터는 서비스가 종료되어 이용할 수 없습니다.
       </template>
     </p>
 
     <p class="end-notice__body">
-      이 서비스는 내가 SKALA 과정에 있는 동안, 기숙사를 쓰는 사람들이 조금 덜 번거로우면
-      좋겠다는 마음으로 직접 만들고 개인 비용으로 운영해 왔다.
+      이 서비스는 제가 SKALA 과정에 있는 동안, 기숙사를 쓰시는 분들이 조금 덜 번거로우면
+      좋겠다는 마음으로 직접 만들고 개인 비용으로 운영해 왔습니다.
     </p>
     <p class="end-notice__body">
       이제 과정을 떠나게 되어 계속 챙기기가 어렵고, 서버 비용도 생각보다 커져서 여기서
-      마무리한다. 갑작스럽게 알리게 되어 미안하다.
+      마무리합니다. 갑작스럽게 알려 드리게 되어 미안합니다.
     </p>
 
     <ul class="end-notice__list">
-      <li v-if="!ended">{{ endDateLabel }}까지는 평소처럼 등록하고 취소할 수 있다.</li>
-      <li>그동안 등록된 명단과 개인정보는 서비스 종료와 함께 모두 지워진다.</li>
+      <li v-if="!ended">{{ endDateLabel }}까지는 평소처럼 등록하고 취소하실 수 있습니다.</li>
+      <li>그동안 등록된 명단과 개인정보는 서비스 종료와 함께 모두 지워집니다.</li>
     </ul>
 
     <p class="end-notice__closing">
-      그동안 이용해 주신 모든 분께 감사드린다. 남은 과정도 잘 마무리하시길 바란다.
+      그동안 이용해 주신 모든 분께 감사드립니다. 남은 과정도 잘 마무리하시길 바랍니다.
     </p>
   </section>
 </template>

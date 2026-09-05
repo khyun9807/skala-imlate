@@ -34,7 +34,7 @@ class ServiceEndNoticeRenderTest {
     }
 
     @Test
-    @DisplayName("문자에 종료일과 '명단이 발송되지 않는다'가 들어간다")
+    @DisplayName("문자에 종료일과 '명단이 발송되지 않습니다'가 들어간다")
     void 문자에_종료_안내가_실린다() {
         String sms = renderer.smsBody(payload());
 
@@ -42,7 +42,7 @@ class ServiceEndNoticeRenderTest {
         assertThat(sms).contains("9/8");
         assertThat(sms).contains("종료");
         // 사감이 알아야 하는 실질적 변화는 "명단이 더는 오지 않는다"는 것이다.
-        assertThat(sms).contains("발송되지 않는다");
+        assertThat(sms).contains("발송되지 않습니다");
     }
 
     @Test
