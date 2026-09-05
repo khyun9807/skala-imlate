@@ -19,19 +19,19 @@ const STOP_DATE_LABEL = '2026년 9월 8일'
 const NOTICE_TITLE = '서비스 종료 안내'
 
 /**
- * 브라우저 시계를 KST 기준 특정 날짜 정오로 고정한다.
+ * 브라우저 시계를 특정 시각으로 고정한다.
  *
  * **반드시 `installApiMocks` 뒤에 불러야 한다.** 그쪽도 내부에서 시계를 고정하므로
- * 먼저 부르면 조용히 덮어써진다(남은 일수가 엉뚱하게 나온다).
+ * 먼저 부르면 조용히 덮어써진다(남은 시간이 엉뚱하게 나온다).
  */
-async function fixDate(page: Page, isoDate: string): Promise<void> {
-  await page.clock.setFixedTime(new Date(`${isoDate}T12:00:00+09:00`))
+async function fixTime(page: Page, iso: string): Promise<void> {
+  await page.clock.setFixedTime(new Date(iso))
 }
 
 test.describe('서비스 종료 안내', () => {
   test('등록 화면 맨 위에 종료일과 중지일이 함께 보인다', async ({ page }) => {
     await installApiMocks(page)
-    await fixDate(page, '2026-09-05')
+    await fixTime(page, '2026-09-05T12:00:00+09:00')
     await page.goto('/')
 
     const notice = page.getByRole('region', { name: NOTICE_TITLE })
@@ -42,19 +42,19 @@ test.describe('서비스 종료 안내', () => {
 
   test('이유를 밝힌다 — 과정을 떠나는 것과 비용 둘 다', async ({ page }) => {
     await installApiMocks(page)
-    await fixDate(page, '2026-09-05')
+    await fixTime(page, '2026-09-05T12:00:00+09:00')
     await page.goto('/')
 
     const notice = page.getByRole('region', { name: NOTICE_TITLE })
     await expect(notice).toContainText('과정을 떠나게 되어')
     await expect(notice).toContainText('비용')
     // 개인정보 처리는 반드시 밝힌다(밝힌 대로 실제로 파기해야 한다).
-    await expect(notice).toContainText('파기됩니다')
+    await expect(notice).toContainText('모두 지워집니다')
   })
 
   test('취소 화면에도 같은 날짜로 붙는다', async ({ page }) => {
     await installApiMocks(page)
-    await fixDate(page, '2026-09-05')
+    await fixTime(page, '2026-09-05T12:00:00+09:00')
     await page.goto('/cancel')
 
     const notice = page.getByRole('region', { name: NOTICE_TITLE })
@@ -64,7 +64,7 @@ test.describe('서비스 종료 안내', () => {
 
   test('★ 사감 조회 화면에는 "사감님께 말씀하세요"가 뜨지 않는다', async ({ page }) => {
     await installApiMocks(page)
-    await fixDate(page, '2026-09-05')
+    await fixTime(page, '2026-09-05T12:00:00+09:00')
     await page.goto(LOOKUP_PATH)
 
     const notice = page.getByRole('region', { name: NOTICE_TITLE })
@@ -75,31 +75,36 @@ test.describe('서비스 종료 안내', () => {
     await expect(notice).toContainText('교육생에게 직접 확인해')
   })
 
-  test('남은 일수가 날짜에 따라 바뀐다', async ({ page }) => {
+  test('남은 시간이 시간 단위로 보인다', async ({ page }) => {
     await installApiMocks(page)
 
-    await fixDate(page, '2026-09-05')
+    // 마지막 등록 마감은 2026-09-07 22:15 KST. 그보다 5시간 전.
+    await fixTime(page, '2026-09-07T17:15:00+09:00')
     await page.goto('/')
-    await expect(page.getByRole('region', { name: NOTICE_TITLE })).toContainText('종료까지 2일')
+    await expect(page.getByRole('region', { name: NOTICE_TITLE })).toContainText('종료까지 5시간')
 
-    // 하루 전 — 숫자 대신 말로 알려 준다("종료까지 1일"은 오늘인지 내일인지 헷갈린다).
-    await fixDate(page, '2026-09-06')
+    // 이틀 전이면 남은 시간이 하루를 넘어도 그대로 시간으로 센다(요구사항).
+    await fixTime(page, '2026-09-05T22:15:00+09:00')
     await page.goto('/')
-    await expect(page.getByRole('region', { name: NOTICE_TITLE })).toContainText('내일이 마지막 날')
+    await expect(page.getByRole('region', { name: NOTICE_TITLE })).toContainText('종료까지 48시간')
+  })
 
-    await fixDate(page, '2026-09-07')
+  test('한 시간이 안 남으면 분으로 내려간다 — "0시간"은 아무것도 알려주지 않는다', async ({ page }) => {
+    await installApiMocks(page)
+
+    await fixTime(page, '2026-09-07T21:45:00+09:00')
     await page.goto('/')
-    await expect(page.getByRole('region', { name: NOTICE_TITLE })).toContainText('오늘이 마지막 날')
+    await expect(page.getByRole('region', { name: NOTICE_TITLE })).toContainText('종료까지 30분')
   })
 
   test('종료일이 지나면 과거형으로 말하고 남은 일수 배지는 사라진다', async ({ page }) => {
     await installApiMocks(page)
-    await fixDate(page, '2026-09-08')
+    await fixTime(page, '2026-09-07T22:16:00+09:00')
     await page.goto('/')
 
     const notice = page.getByRole('region', { name: NOTICE_TITLE })
     await expect(notice).toContainText('마쳤습니다')
     await expect(notice).not.toContainText('종료까지')
-    await expect(notice).not.toContainText('마지막 날')
+    await expect(notice).not.toContainText('이용하실 수 없어요')
   })
 })

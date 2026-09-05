@@ -180,19 +180,48 @@ for LG in "/imlate/app" "/imlate/app-error" "/aws/rds/instance/imlate-prod-mysql
 done
 
 # ---------------------------------------------------------------------
-# 7. 사람이 판단해야 하는 것 — 자동으로 지우지 않는다
+# 7. imlate 이외의 과금 자원까지 정리 (운영자 요청)
 #
-#    이 계정에는 imlate 소유가 아닐 수 있는 자원이 섞여 있다(2026-09-05 점검에서
-#    payperv2-db-snapshot 과 다른 AMI 의 EBS 스냅샷을 발견했다). 남의 프로젝트 자산을
-#    스크립트가 말없이 지우면 안 되므로 목록만 보여준다.
+#    이 계정에는 imlate 가 만들지 않은 자원이 섞여 있다(수동 RDS 스냅샷, 직접 만든 AMI와
+#    그 백업 스냅샷). imlate 만 지우면 계정 청구가 0 이 되지 않으므로 함께 정리한다.
+#
+#    순서가 중요하다 — AMI 를 먼저 등록 해제해야 그 AMI 가 참조하던 EBS 스냅샷을 지울 수 있다.
+#    반대로 하면 InvalidSnapshot.InUse 로 거부된다.
 # ---------------------------------------------------------------------
-say "7. 확인이 필요한 잔여 자원 (이 스크립트는 지우지 않는다)"
-info "수동 RDS 스냅샷 — DB 를 지워도 남는다:"
-aws rds describe-db-snapshots --region "$REGION" --snapshot-type manual --query "DBSnapshots[].{Id:DBSnapshotIdentifier,GB:AllocatedStorage,When:SnapshotCreateTime}" --output table 2>/dev/null || info "  (조회 실패)"
-info "EBS 스냅샷:"
-aws ec2 describe-snapshots --owner-ids self --region "$REGION" --query "Snapshots[].{Id:SnapshotId,GB:VolumeSize,Desc:Description}" --output table 2>/dev/null || info "  (조회 실패)"
-info "직접 만든 AMI:"
-aws ec2 describe-images --owners self --region "$REGION" --query "Images[].{Id:ImageId,Name:Name}" --output table 2>/dev/null || info "  (조회 실패)"
+say "7. imlate 이외의 과금 자원 정리"
+
+info "(7-1) 수동 RDS 스냅샷 — DB 를 지워도 남는다"
+MANUAL_SNAPS="$(aws rds describe-db-snapshots --region "$REGION" --snapshot-type manual --query "DBSnapshots[].DBSnapshotIdentifier" --output text 2>/dev/null || true)"
+if [ -n "${MANUAL_SNAPS:-}" ]; then
+  for SNAP in $MANUAL_SNAPS; do
+    info "삭제 대상 RDS 스냅샷: $SNAP"
+    run aws rds delete-db-snapshot --region "$REGION" --db-snapshot-identifier "$SNAP"
+  done
+else
+  info "수동 RDS 스냅샷 없음"
+fi
+
+info "(7-2) 직접 만든 AMI 등록 해제 — 백업 스냅샷을 지우려면 이게 먼저다"
+OWNED_AMIS="$(aws ec2 describe-images --owners self --region "$REGION" --query "Images[].ImageId" --output text 2>/dev/null || true)"
+if [ -n "${OWNED_AMIS:-}" ]; then
+  for AMI in $OWNED_AMIS; do
+    info "등록 해제 대상 AMI: $AMI"
+    run aws ec2 deregister-image --region "$REGION" --image-id "$AMI"
+  done
+else
+  info "직접 만든 AMI 없음"
+fi
+
+info "(7-3) EBS 스냅샷"
+OWNED_SNAPS="$(aws ec2 describe-snapshots --owner-ids self --region "$REGION" --query "Snapshots[].SnapshotId" --output text 2>/dev/null || true)"
+if [ -n "${OWNED_SNAPS:-}" ]; then
+  for SNAP in $OWNED_SNAPS; do
+    info "삭제 대상 EBS 스냅샷: $SNAP"
+    run aws ec2 delete-snapshot --region "$REGION" --snapshot-id "$SNAP"
+  done
+else
+  info "EBS 스냅샷 없음"
+fi
 
 say "완료"
 if [ "$EXECUTE" -eq 1 ]; then

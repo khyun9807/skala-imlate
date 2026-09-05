@@ -58,6 +58,34 @@ public class CurfewNoticeRenderer {
     private static final String NO_REPLY_EMAIL =
             "이 메일과 함께 발송된 문자의 발신번호는 수신 전용이라 답장을 받을 수 없습니다.";
 
+    /*
+     * ------------------------------------------------------------------
+     * 서비스 종료 안내 (2026-09-07 마지막 운영)
+     *
+     * 사감 선생님께 종료를 알리는 가장 확실한 경로가 이것이다. 조회 페이지에도 안내를 띄웠지만
+     * 그건 링크를 눌러야 보인다. 반면 이 문자·메일은 매일 밤 반드시 받으시는 것이라
+     * 남은 사흘(9/5·9/6·9/7) 동안 세 번 도달한다.
+     *
+     * ※ 날짜는 frontend/src/config/serviceEnd.ts 와 같은 값이어야 한다.
+     *   한쪽만 고치면 화면과 문자가 다른 날짜를 말하게 된다.
+     * ------------------------------------------------------------------
+     */
+
+    /** 종료 안내(문자용). 문자는 길이가 곧 비용이라 두 줄로 끝낸다. */
+    private static final String SERVICE_END_SMS =
+            "※ 이 서비스는 9/7(월)을 끝으로 종료됩니다. 9/8부터는 명단이 발송되지 않습니다.";
+
+    /** 종료 안내(이메일용). 여백이 있어 이유까지 밝힌다. */
+    private static final String SERVICE_END_EMAIL_TITLE = "[서비스 종료 안내]";
+    private static final String[] SERVICE_END_EMAIL_LINES = {
+        "이 시스템은 2026년 9월 7일(월) 야간 복귀를 끝으로 운영을 마칩니다.",
+        "9월 8일(화)부터는 서비스가 종료되어 명단이 문자·메일로 발송되지 않습니다.",
+        "만든 사람이 SKALA 과정을 떠나게 되어 계속 챙기기가 어렵고, 서버 비용도 개인이"
+            + " 감당하기에 부담이 커져 부득이 마무리하게 되었습니다.",
+        "번거로우시겠지만 9월 8일부터는 종전처럼 교육생에게 직접 확인해 주시기를 부탁드립니다.",
+        "그동안 이용해 주셔서 진심으로 감사했습니다.",
+    };
+
     /** 문의처 이름(예: SKALA 운영진). {@code imlate.notification.contact-name}. */
     private final String contactName;
     /** 문의처 이메일. {@code imlate.notification.contact-email}. */
@@ -144,6 +172,7 @@ public class CurfewNoticeRenderer {
         sb.append(NO_REPLY_SMS).append('\n');
         sb.append("   문의는 ").append(contactName).append(" 또는 ").append(contactEmail)
                 .append(" 으로 부탁드립니다.\n");
+        sb.append(SERVICE_END_SMS).append('\n');
         sb.append("전체 명단: ").append(payload.lookupUrl());
         return sb.toString();
     }
@@ -207,6 +236,12 @@ public class CurfewNoticeRenderer {
         sb.append(" - ").append(NO_REPLY_EMAIL).append('\n');
         sb.append(" - 문의는 ").append(contactName).append(" 또는 ").append(contactEmail)
                 .append(" 으로 부탁드립니다.\n\n");
+
+        sb.append(SERVICE_END_EMAIL_TITLE).append('\n');
+        for (String noticeLine : SERVICE_END_EMAIL_LINES) {
+            sb.append(" - ").append(noticeLine).append('\n');
+        }
+        sb.append('\n');
 
         sb.append(line).append('\n');
         sb.append(" 본 메일은 기숙사 야간복귀 등록 시스템에서 자동 발송되었습니다.\n");
@@ -300,6 +335,17 @@ public class CurfewNoticeRenderer {
                 .append("word-break:break-all;\">").append(escape(url)).append("</div>\n");
         sb.append("<div style=\"margin-top:6px;font-size:14px;color:#9ca3af;\">")
                 .append("링크에는 열람 토큰이 포함되어 있습니다. 외부에 공유하지 말아 주세요.</div>\n");
+        sb.append("</div>\n");
+
+        // 서비스 종료 안내. 명단 카드 다음, 문의 앞에 둔다 — 사감님이 반드시 스크롤로 지나는 자리다.
+        sb.append("<div style=\"background:#fff7ed;border:1px solid #fdba74;border-radius:12px;padding:16px;margin-top:14px;\">\n");
+        sb.append("<div style=\"font-size:16px;font-weight:700;color:#9a3412;margin-bottom:10px;\">")
+                .append(escape(SERVICE_END_EMAIL_TITLE)).append("</div>\n");
+        sb.append("<div style=\"font-size:15px;color:#7c2d12;line-height:1.7;\">");
+        for (String noticeLine : SERVICE_END_EMAIL_LINES) {
+            sb.append(escape(noticeLine)).append("<br>\n");
+        }
+        sb.append("</div>\n");
         sb.append("</div>\n");
 
         // 회신 불가 + 문의처. 메일 주소는 mailto: 링크로 걸어 바로 보낼 수 있게 한다.
